@@ -1,6 +1,10 @@
-## Vossploee Task Orchestrator
+## Vossploee
 
-FastAPI + SQLite pipeline: the **decomposer** normalizes each incoming task, **routes it to a capability namespace**, then that capability’s **architect** and **implementer** workers process queue01 → queue02 in parallel with other capabilities.
+**AI-Agent Framework for Distributed Autonomous Organizations**
+
+The goal is a **base for building autonomous virtual multifunctional employees**—capable agents you can assemble into **Distributed Autonomous Organizations (DAOs)** so coordinated, decentralized teams of agents can own and execute work end to end.
+
+This repository implements that foundation as a FastAPI + SQLite **task orchestrator**: the **decomposer** normalizes each incoming task, **routes it to a capability namespace**, then that capability’s **architect** and **implementer** workers process queue01 → queue02 in parallel with other capabilities.
 
 ### Run
 
