@@ -1,0 +1,30 @@
+[project]
+name = "vossploee"
+version = "0.1.0"
+authors = [
+    { name = "Andrey Olishchuk", email = "aol@vossmoos.de" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.135.3",
+    "pydantic-ai>=1.80.0",
+    "pydantic-settings>=2.13.1",
+    "uvicorn>=0.44.0",
+]
+
+[project.scripts]
+vossploee = "vossploee:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
