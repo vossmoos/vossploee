@@ -1,0 +1,4 @@
+# model = "gpt-4o-mini"
+
+# Add tools from any registered namespace, e.g. "core.imap", once listed here and registered.
+tools = []
