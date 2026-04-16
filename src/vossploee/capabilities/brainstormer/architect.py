@@ -24,6 +24,7 @@ class BrainstormerArchitectWorker(PydanticTaskWorker[ArchitectPlan]):
                     "(Given/When/Then is fine) that captures how that idea would be explored or validated."
                 ),
             ),
+            capability_name="brainstormer",
         )
 
     async def handle(self, *, task: TaskRecord, repository: TaskRepository) -> None:

@@ -16,58 +16,76 @@ def _build_client(tmp_path: Path) -> TestClient:
         database_path=tmp_path / "test-tasks.db",
         poll_interval_seconds=0.05,
         agent_model="test",
-        enabled_capabilities=["consultant"],
+        enabled_capabilities=["core"],
     )
     app = create_app(settings)
     return TestClient(app)
 
 
-def test_task_flow_builds_tree_and_deletes_descendants(tmp_path: Path) -> None:
+def test_task_flow_archives_finished_tree_to_tasklog(tmp_path: Path) -> None:
     with _build_client(tmp_path) as client:
         response = client.post(
             "/api/tasks",
             json={
-                "title": "Create agent scaffold",
                 "description": (
-                    "Accept user tasks. Split them into gherkin steps. "
-                    "Run the implementation worker."
+                    "Create agent scaffold: accept user tasks, split them into gherkin steps, "
+                    "run the implementation worker."
                 ),
             },
         )
 
         assert response.status_code == 201
-        root_task = response.json()
+        roots = response.json()
+        assert isinstance(roots, list)
+        assert len(roots) >= 1
+        root_task = roots[0]
         assert root_task["queue_name"] == "queue01"
         assert root_task["agent_name"] == "Decomposer"
-        assert root_task["capability_name"] == "consultant"
+        assert root_task["capability_name"] == "core"
 
-        deadline = time.time() + 3
-        tree: list[dict] = []
+        deadline = time.time() + 5
+        log_entries: list[dict] = []
         while time.time() < deadline:
-            list_response = client.get("/api/tasks")
-            assert list_response.status_code == 200
-            tree = list_response.json()
-            if tree and tree[0]["status"] == "completed" and tree[0]["children"]:
-                if all(child["status"] == "completed" for child in tree[0]["children"]):
-                    break
+            log_response = client.get("/api/tasklog")
+            assert log_response.status_code == 200
+            log_entries = log_response.json()
+            if len(log_entries) >= 1:
+                break
             time.sleep(0.05)
 
-        assert len(tree) == 1
-        assert tree[0]["id"] == root_task["id"]
-        assert tree[0]["status"] == "completed"
-        assert tree[0]["capability_name"] == "consultant"
-        assert len(tree[0]["children"]) >= 1
-        assert all(child["queue_name"] == "queue02" for child in tree[0]["children"])
-        assert all(child["capability_name"] == "consultant" for child in tree[0]["children"])
-        assert all(isinstance(child["gherkin"], str) and child["gherkin"] for child in tree[0]["children"])
-        assert all(child["status"] == "completed" for child in tree[0]["children"])
+        assert len(log_entries) == 1
+        entry = log_entries[0]
+        assert entry["root_id"] == root_task["id"]
+        assert entry["capability_name"] == "core"
+        payload = entry["payload"]
+        assert payload["id"] == root_task["id"]
+        assert payload["status"] == "completed"
+        assert payload["queue_name"] == "queue01"
+        assert len(payload["children"]) >= 1
+        assert all(child["queue_name"] == "queue02" for child in payload["children"])
+        assert all(child["capability_name"] == "core" for child in payload["children"])
+        assert all(isinstance(child["gherkin"], str) and child["gherkin"] for child in payload["children"])
+        assert all(child["status"] == "completed" for child in payload["children"])
 
-        delete_response = client.delete(f"/api/tasks/{root_task['id']}")
-        assert delete_response.status_code == 204
+        page = client.get("/api/log")
+        assert page.status_code == 200
+        assert len(page.json()) == 1
+        assert page.json()[0]["root_id"] == root_task["id"]
+
+        page2 = client.get("/api/log", params={"offset": 1, "limit": 10})
+        assert page2.status_code == 200
+        assert page2.json() == []
 
         list_response = client.get("/api/tasks")
         assert list_response.status_code == 200
         assert list_response.json() == []
+
+
+def test_log_empty_database_defaults(tmp_path: Path) -> None:
+    with _build_client(tmp_path) as client:
+        r = client.get("/api/log")
+        assert r.status_code == 200
+        assert r.json() == []
 
 
 def test_unknown_capability_is_rejected(tmp_path: Path) -> None:
@@ -87,7 +105,7 @@ def test_capabilities_endpoint_returns_metadata(tmp_path: Path) -> None:
         database_path=tmp_path / "test-tasks.db",
         poll_interval_seconds=0.05,
         agent_model="test",
-        enabled_capabilities=["consultant", "brainstormer"],
+        enabled_capabilities=["core", "brainstormer"],
     )
     app = create_app(settings)
     with TestClient(app) as client:
@@ -96,6 +114,12 @@ def test_capabilities_endpoint_returns_metadata(tmp_path: Path) -> None:
         payload = response.json()
         assert len(payload) == 2
         by_id = {item["id"]: item for item in payload}
-        assert "consultant" in by_id and "brainstormer" in by_id
-        assert by_id["consultant"]["title"]
-        assert "Description" in by_id["consultant"]["readme_markdown"] or by_id["consultant"]["description"]
+        assert "core" in by_id and "brainstormer" in by_id
+        assert by_id["core"]["title"]
+        assert "Description" in by_id["core"]["readme_markdown"] or by_id["core"]["description"]
+        assert by_id["core"]["tools"] == [
+            "core.imap",
+            "core.queue_delete",
+            "core.queue_defer",
+        ]
+        assert by_id["brainstormer"]["tools"] == []

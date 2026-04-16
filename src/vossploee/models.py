@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AgentName(StrEnum):
@@ -30,8 +31,9 @@ class TaskStatus(StrEnum):
 
 
 class CreateTaskRequest(BaseModel):
-    title: str = Field(min_length=3, max_length=200)
-    description: str = Field(min_length=3)
+    """Single natural-language input; the decomposer derives title, description, and capability."""
+
+    description: str = Field(min_length=3, max_length=50_000)
 
 
 class CapabilityInfo(BaseModel):
@@ -42,20 +44,80 @@ class CapabilityInfo(BaseModel):
     description: str = ""
     functionality: str = ""
     readme_markdown: str = ""
+    model_override: str | None = Field(
+        default=None,
+        description="LLM model from capability config.toml; None means use VOSSPLOEE_AGENT_MODEL.",
+    )
+    tools: list[str] = Field(
+        default_factory=list,
+        description="Qualified tool ids enabled for this capability (namespace.tool).",
+    )
 
 
-class DecomposedTask(BaseModel):
+class DecomposedRootTask(BaseModel):
+    """One queue01 root task produced by the Decomposer (optionally scheduled)."""
+
     title: str
     description: str
     capability_name: str = Field(
         description="One of the enabled capability ids (see GET /api/capabilities).",
     )
+    scheduled_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When this queue01 root becomes runnable (UTC). Omit for 'as soon as possible'. "
+            "Use for recurring monitoring: one root per run with staggered times."
+        ),
+    )
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def normalize_root_scheduled_at_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+
+class DecomposedPlan(BaseModel):
+    """Decomposer output: one or more queue01 roots (e.g. hourly monitoring runs)."""
+
+    roots: list[DecomposedRootTask] = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_single_root(cls, data: object) -> object:
+        if isinstance(data, dict) and "roots" not in data:
+            if "title" in data and "description" in data and "capability_name" in data:
+                return {"roots": [data]}
+        return data
+
+
+# Backwards-compatible alias for the old flat shape (also accepted via DecomposedPlan validator).
+DecomposedTask = DecomposedRootTask
 
 
 class ArchitectTask(BaseModel):
     title: str
     description: str
     gherkin: str
+    scheduled_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When this queue02 action must first become runnable (UTC). Omit for 'as soon as possible'. "
+            "Use when the work is not for right now but for a specific future time."
+        ),
+    )
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def normalize_scheduled_at_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 class ArchitectPlan(BaseModel):
@@ -84,6 +146,25 @@ class TaskRecord(BaseModel):
     updated_at: datetime
     claimed_at: datetime | None = None
     completed_at: datetime | None = None
+    scheduled_at: datetime | None = Field(
+        default=None,
+        description="If set (UTC), the task is not claimable until this time.",
+    )
+
+    @field_validator(
+        "created_at",
+        "updated_at",
+        "claimed_at",
+        "completed_at",
+        "scheduled_at",
+    )
+    @classmethod
+    def normalize_task_datetimes_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 class TaskTree(TaskRecord):
@@ -91,3 +172,13 @@ class TaskTree(TaskRecord):
 
 
 TaskTree.model_rebuild()
+
+
+class TaskLogEntry(BaseModel):
+    """Archived task tree (full JSON snapshot) moved from `tasks` when a root workflow finishes."""
+
+    id: str
+    root_id: str
+    capability_name: str
+    payload: dict[str, Any]
+    created_at: datetime

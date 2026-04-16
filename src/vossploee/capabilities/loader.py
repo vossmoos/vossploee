@@ -4,13 +4,12 @@ from importlib import import_module
 from pkgutil import iter_modules
 
 from vossploee.capabilities.base import CapabilityModule
+from vossploee.capabilities.capability_settings import load_capability_settings
 from vossploee.capabilities.readme import parse_capability_readme, read_capability_readme_text
 from vossploee.config import Settings
+from vossploee.errors import CapabilityConfigurationError
 from vossploee.models import CapabilityInfo
-
-
-class CapabilityConfigurationError(ValueError):
-    pass
+from vossploee.tools.registry import is_registered, registered_qualified_ids
 
 
 def list_capability_names() -> list[str]:
@@ -38,22 +37,50 @@ def resolve_enabled_capability_names(settings: Settings) -> list[str]:
     return configured
 
 
+def bootstrap_tool_registry() -> None:
+    """Import `tools_register` for every capability package so tools are defined before config validation."""
+    for name in list_capability_names():
+        mod = f"vossploee.capabilities.{name}.tools_register"
+        try:
+            import_module(mod)
+        except ModuleNotFoundError as exc:
+            if exc.name != mod:
+                raise
+
+
+def _validate_tool_allowlists(enabled_capability_ids: list[str]) -> None:
+    for cap_id in enabled_capability_ids:
+        cfg = load_capability_settings(cap_id)
+        for tid in cfg.tools:
+            if not is_registered(tid):
+                known = ", ".join(sorted(registered_qualified_ids())) or "<none>"
+                raise CapabilityConfigurationError(
+                    f"Capability '{cap_id}' references unknown tool '{tid}' in config.toml. "
+                    f"Registered tools: {known}."
+                )
+
+
 def load_capabilities(settings: Settings) -> dict[str, CapabilityModule]:
+    bootstrap_tool_registry()
     enabled = resolve_enabled_capability_names(settings)
     if not enabled:
         raise CapabilityConfigurationError("No capability packages found under vossploee.capabilities.")
+    _validate_tool_allowlists(enabled)
     return {name: load_capability(name, settings) for name in enabled}
 
 
 def capability_info(capability_id: str) -> CapabilityInfo:
     raw = read_capability_readme_text(capability_id)
     parsed = parse_capability_readme(raw, capability_id)
+    cfg = load_capability_settings(capability_id)
     return CapabilityInfo(
         id=capability_id,
         title=parsed.title,
         description=parsed.description,
         functionality=parsed.functionality,
         readme_markdown=parsed.raw_markdown,
+        model_override=cfg.model,
+        tools=list(cfg.tools),
     )
 
 

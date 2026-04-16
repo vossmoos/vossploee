@@ -2,15 +2,24 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Annotated
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, HTTPException, Query, Response, status
 
 from vossploee.agents import AgentRegistry
 from vossploee.config import Settings, get_settings
 from vossploee.database import Database
 from vossploee.capabilities.loader import list_capability_infos
-from vossploee.models import AgentName, CapabilityInfo, CreateTaskRequest, TaskRecord, TaskTree
+from vossploee.errors import AgentExecutionError
+from vossploee.models import (
+    AgentName,
+    CapabilityInfo,
+    CreateTaskRequest,
+    TaskLogEntry,
+    TaskRecord,
+    TaskTree,
+)
 from vossploee.repository import TaskRepository
 from vossploee.workers import WorkerManager
 
@@ -59,27 +68,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post(
         f"{app_settings.api_prefix}/tasks",
-        response_model=TaskRecord,
+        response_model=list[TaskRecord],
         status_code=status.HTTP_201_CREATED,
     )
-    async def create_task(payload: CreateTaskRequest) -> TaskRecord:
-        normalized = await app.state.services.agents.decomposer.decompose(
-            title=payload.title,
-            description=payload.description,
-        )
-        task = await app.state.services.repository.create_root_task(
-            title=normalized.title,
-            description=normalized.description,
-            agent_name=AgentName.DECOMPOSER,
-            capability_name=normalized.capability_name,
-        )
-        if task is None:  # pragma: no cover - defensive fallback
-            raise HTTPException(status_code=500, detail="Task creation failed.")
-        return task
+    async def create_task(payload: CreateTaskRequest) -> list[TaskRecord]:
+        try:
+            plan = await app.state.services.agents.decomposer.decompose(
+                description=payload.description,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except AgentExecutionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        created: list[TaskRecord] = []
+        for root in plan.roots:
+            task = await app.state.services.repository.create_root_task(
+                title=root.title,
+                description=root.description,
+                agent_name=AgentName.DECOMPOSER,
+                capability_name=root.capability_name,
+                scheduled_at=root.scheduled_at,
+            )
+            created.append(task)
+        return created
 
     @app.get(f"{app_settings.api_prefix}/tasks", response_model=list[TaskTree])
     async def list_tasks() -> list[TaskTree]:
         return await app.state.services.repository.list_tree()
+
+    @app.get(f"{app_settings.api_prefix}/tasklog", response_model=list[TaskLogEntry])
+    async def list_tasklog() -> list[TaskLogEntry]:
+        return await app.state.services.repository.list_tasklog()
+
+    @app.get(f"{app_settings.api_prefix}/log", response_model=list[TaskLogEntry])
+    async def list_log(
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=500)] = 10,
+    ) -> list[TaskLogEntry]:
+        """Paginated archived completed workflows from `tasklog` (newest first)."""
+        return await app.state.services.repository.list_tasklog(offset=offset, limit=limit)
 
     @app.get(f"{app_settings.api_prefix}/capabilities", response_model=list[CapabilityInfo])
     async def list_capabilities() -> list[CapabilityInfo]:

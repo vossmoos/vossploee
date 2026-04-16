@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
+from dotenv import load_dotenv
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -17,6 +18,12 @@ class Settings(BaseSettings):
     """Comma-separated capability ids, or empty to enable every discovered capability package."""
     enabled_capabilities: Annotated[list[str], NoDecode] = Field(default_factory=list)
     api_prefix: str = "/api"
+    max_decomposed_roots: int = Field(
+        default=168,
+        ge=1,
+        le=500,
+        description="Max queue01 roots the Decomposer may emit in one POST /tasks (e.g. hourly runs).",
+    )
     # Loaded from .env via OPENAI_API_KEY (or VOSSPLOEE_OPENAI_API_KEY); injected into
     # os.environ so pydantic-ai / OpenAI SDK pick it up (they do not read our .env file).
     openai_api_key: str | None = Field(
@@ -44,6 +51,9 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # pydantic-settings reads .env only into declared fields; merge the file into os.environ so
+    # capability tools that resolve credentials via getenv(cfg.user_env) (e.g. mail) see .env values.
+    load_dotenv()
     settings = Settings()
     if settings.openai_api_key:
         os.environ.setdefault("OPENAI_API_KEY", settings.openai_api_key)

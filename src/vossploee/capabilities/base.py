@@ -8,9 +8,12 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import AbstractCapability as PydanticAgentCapability
 
+from vossploee.agent_context import with_datetime_context
+from vossploee.capabilities.capability_settings import load_capability_settings
 from vossploee.config import Settings
 from vossploee.errors import AgentExecutionError
 from vossploee.models import AgentName, TaskQueue, TaskRecord
+from vossploee.tools.registry import resolve_tools
 
 if TYPE_CHECKING:
     from vossploee.repository import TaskRepository
@@ -37,15 +40,27 @@ class TaskWorker(ABC):
 
 
 class PydanticTaskWorker(TaskWorker, Generic[OutputT], ABC):
-    def __init__(self, settings: Settings, spec: AgentModuleSpec[OutputT]) -> None:
-        self._model_name = settings.agent_model
+    def __init__(
+        self,
+        settings: Settings,
+        spec: AgentModuleSpec[OutputT],
+        *,
+        capability_name: str,
+        include_capability_tools: bool = True,
+    ) -> None:
+        cap_cfg = load_capability_settings(capability_name)
+        self._model_name = cap_cfg.model or settings.agent_model
         self._role_label = spec.name
+        capability_tools = (
+            resolve_tools(cap_cfg.tools) if include_capability_tools else ()
+        )
+        combined_tools = tuple(spec.tools) + capability_tools
         self.agent = Agent(
             model=self._model_name,
             output_type=spec.output_type,
             name=spec.name,
             system_prompt=spec.system_prompt,
-            tools=spec.tools,
+            tools=combined_tools,
             capabilities=spec.capabilities,
             defer_model_check=True,
         )
@@ -54,7 +69,7 @@ class PydanticTaskWorker(TaskWorker, Generic[OutputT], ABC):
         if not self._model_name:
             raise AgentExecutionError(f"{self._role_label} agent model is not configured.")
 
-        result = await self.agent.run(prompt)
+        result = await self.agent.run(with_datetime_context(prompt))
         return result.output
 
 

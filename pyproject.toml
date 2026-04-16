@@ -10,6 +10,7 @@ dependencies = [
     "fastapi>=0.135.3",
     "pydantic-ai>=1.80.0",
     "pydantic-settings>=2.13.1",
+    "python-dotenv>=1.2.2",
     "uvicorn>=0.44.0",
 ]
 
@@ -22,7 +23,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=9.0.3",
 ]
 

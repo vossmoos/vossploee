@@ -1,6 +1,6 @@
 from vossploee.capabilities.base import AgentModuleSpec, CapabilityModule, PydanticTaskWorker, TaskWorker
+from vossploee.errors import CapabilityConfigurationError
 from vossploee.capabilities.loader import (
-    CapabilityConfigurationError,
     capability_info,
     decomposer_capability_catalog_text,
     list_capability_infos,

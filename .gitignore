@@ -5,3 +5,12 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 data/*.db
+
+# Optional local capability package (not tracked)
+src/vossploee/capabilities/upwork/
+src/vossploee/capabilities/upworkmanager/
+tests/test_upwork_dedup.py
+tests/test_upwork_oauth.py
+uw.py
+uw_calibrate.py
+uw_oauth.py

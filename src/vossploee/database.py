@@ -18,18 +18,37 @@ CREATE TABLE IF NOT EXISTS tasks (
     task_kind TEXT NOT NULL,
     status TEXT NOT NULL,
     agent_name TEXT NOT NULL,
-    capability_name TEXT NOT NULL DEFAULT 'consultant',
+    capability_name TEXT NOT NULL DEFAULT 'core',
     gherkin TEXT,
     result TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     claimed_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    scheduled_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_root_id ON tasks(root_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_queue_status_created ON tasks(queue_name, status, created_at);
+
+CREATE TABLE IF NOT EXISTS tasklog (
+    id TEXT PRIMARY KEY,
+    root_id TEXT NOT NULL,
+    capability_name TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasklog_root_id ON tasklog(root_id);
+CREATE INDEX IF NOT EXISTS idx_tasklog_capability ON tasklog(capability_name);
+
+CREATE TABLE IF NOT EXISTS upwork_processed_jobs (
+    job_id TEXT PRIMARY KEY NOT NULL,
+    processed_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_upwork_processed_at ON upwork_processed_jobs(processed_at);
 """
 
 
@@ -61,5 +80,46 @@ class Database:
 
         if "capability_name" not in columns:
             await conn.execute(
-                "ALTER TABLE tasks ADD COLUMN capability_name TEXT NOT NULL DEFAULT 'consultant'"
+                "ALTER TABLE tasks ADD COLUMN capability_name TEXT NOT NULL DEFAULT 'core'"
+            )
+
+        cursor = await conn.execute("PRAGMA table_info(tasks)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "scheduled_at" not in columns:
+            await conn.execute("ALTER TABLE tasks ADD COLUMN scheduled_at TEXT")
+
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_at)"
+        )
+
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='tasklog'"
+        )
+        if await cursor.fetchone() is None:
+            await conn.executescript(
+                """
+                CREATE TABLE tasklog (
+                    id TEXT PRIMARY KEY,
+                    root_id TEXT NOT NULL,
+                    capability_name TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_tasklog_root_id ON tasklog(root_id);
+                CREATE INDEX IF NOT EXISTS idx_tasklog_capability ON tasklog(capability_name);
+                """
+            )
+
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='upwork_processed_jobs'"
+        )
+        if await cursor.fetchone() is None:
+            await conn.executescript(
+                """
+                CREATE TABLE upwork_processed_jobs (
+                    job_id TEXT PRIMARY KEY NOT NULL,
+                    processed_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_upwork_processed_at ON upwork_processed_jobs(processed_at);
+                """
             )

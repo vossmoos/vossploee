@@ -23,6 +23,7 @@ class BrainstormerImplementerWorker(PydanticTaskWorker[ImplementationResult]):
                     "this is exploration, not final production code."
                 ),
             ),
+            capability_name="brainstormer",
         )
 
     async def handle(self, *, task: TaskRecord, repository: TaskRepository) -> None:
