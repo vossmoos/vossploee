@@ -6,6 +6,8 @@ The same idea scales socially: **many Vossploee units**—each an independent em
 
 You can run a unit **on your laptop, a workstation, or any virtual machine** with a normal Python environment. **LLM calls** are configured through Pydantic AI model ids and provider credentials: use **public APIs** (OpenAI, Anthropic, Google, and others supported by your stack) or **private / self-hosted** endpoints, depending on policy and networking.
 
+**Vossploee behaves in a non-deterministic way**: planning and execution are model-guided, so runs are not fixed scripts with identical outcomes every time. The concrete surface area for acting in the world is **tools**—defined ways to read, edit, call external systems, or otherwise perform an action. Tools are **grouped into capabilities**. Each **capability** bundles its own slice of behavior: **agent implementations** that follow the framework’s interfaces, **specialized prompts**, **tools** wired to external APIs where needed, and **supporting data** (configuration, allowlists, and similar) that keeps that domain coherent.
+
 ## Technologies
 
 - **Python** 3.12+
