@@ -10,7 +10,7 @@ from vossploee.capabilities import CapabilityConfigurationError
 from vossploee.config import Settings
 from vossploee.main import create_app
 
-_TEST_API_KEY = "1012802"
+_TEST_API_KEY = "test-x-api-key"
 
 
 def _build_client(tmp_path: Path) -> TestClient:
@@ -104,6 +104,21 @@ def test_api_key_missing_returns_401(tmp_path: Path) -> None:
         r = client.get("/health")
         assert r.status_code == 401
         assert r.json()["detail"] == "Not authenticated"
+
+
+def test_api_key_empty_skips_http_key_check(tmp_path: Path) -> None:
+    settings = Settings(
+        database_path=tmp_path / "test-tasks.db",
+        poll_interval_seconds=0.05,
+        agent_model="test",
+        enabled_capabilities=["core"],
+        api_key="",
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        r = client.get("/health")
+        assert r.status_code == 200
+        assert r.json() == {"status": "ok"}
 
 
 def test_api_key_wrong_returns_403(tmp_path: Path) -> None:

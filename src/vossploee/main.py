@@ -33,6 +33,9 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         self.expected_key = expected_key
 
     async def dispatch(self, request: Request, call_next):
+        expected = (self.expected_key or "").strip()
+        if not expected:
+            return await call_next(request)
         supplied = (request.headers.get("x-api-key") or "").strip()
         if not supplied:
             return JSONResponse(
