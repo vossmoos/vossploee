@@ -57,11 +57,13 @@ cp default.env .env
 uv run python -m uvicorn vossploee.main:app --reload
 ```
 
-Health check (send `X-API-KEY` unless you have explicitly disabled HTTP key checks):
+Health check over **HTTPS** in front of nginx (send `X-API-KEY` unless you have explicitly disabled HTTP key checks; use your `PUBLIC_HOST` if it differs):
 
 ```bash
 curl -H "X-API-KEY: <your-key>" http://127.0.0.1:8000/health
 ```
+
+Local uvicorn without a TLS terminator listens on `http://127.0.0.1:8000` only.
 
 ## API
 
