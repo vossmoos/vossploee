@@ -1,4 +1,8 @@
 .env
+.ansible-tmp/
+
+# Local Ansible inventory (IPs, keys); use inventory.example as template
+deployments/ansible/inventory
 .venv/
 __pycache__/
 *.py[cod]

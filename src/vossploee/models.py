@@ -30,6 +30,18 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
 
 
+class TaskQueuePolicy(StrEnum):
+    """How pending tasks are ordered when claimed (per queue + capability).
+
+    ``fifo`` (default): oldest pending task first.
+    ``lifo``: among tasks explicitly tagged LIFO, newest first; **all** pending LIFO tasks are
+    claimed before **any** pending FIFO task for the same queue and capability.
+    """
+
+    FIFO = "fifo"
+    LIFO = "lifo"
+
+
 class CreateTaskRequest(BaseModel):
     """Single natural-language input; the decomposer derives title, description, and capability."""
 
@@ -61,6 +73,13 @@ class DecomposedRootTask(BaseModel):
     description: str
     capability_name: str = Field(
         description="One of the enabled capability ids (see GET /api/capabilities).",
+    )
+    queue_policy: TaskQueuePolicy = Field(
+        default=TaskQueuePolicy.FIFO,
+        description=(
+            "Claim order: fifo (default) or lifo. Use lifo when this root must run before older "
+            "routine work (e.g. cancel/clear queue, urgent override)."
+        ),
     )
     scheduled_at: datetime | None = Field(
         default=None,
@@ -102,6 +121,10 @@ class ArchitectTask(BaseModel):
     title: str
     description: str
     gherkin: str
+    queue_policy: TaskQueuePolicy = Field(
+        default=TaskQueuePolicy.FIFO,
+        description="queue02 claim order for this action: fifo (default) or lifo (see TaskQueuePolicy).",
+    )
     scheduled_at: datetime | None = Field(
         default=None,
         description=(
@@ -140,6 +163,7 @@ class TaskRecord(BaseModel):
     status: TaskStatus
     agent_name: AgentName
     capability_name: str
+    queue_policy: TaskQueuePolicy = TaskQueuePolicy.FIFO
     gherkin: str | None = None
     result: str | None = None
     created_at: datetime

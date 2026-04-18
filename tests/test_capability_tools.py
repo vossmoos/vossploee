@@ -17,6 +17,8 @@ from vossploee.tools.registry import is_registered, register_tool
 def test_core_imap_registers_after_bootstrap() -> None:
     bootstrap_tool_registry()
     assert is_registered("core.imap")
+    assert is_registered("core.queue_list_all")
+    assert is_registered("core.queue_delete_batch_resolved")
     assert is_registered("upworkmanager.search_jobs")
 
 

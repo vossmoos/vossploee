@@ -10,6 +10,8 @@ from vossploee.capabilities import CapabilityConfigurationError
 from vossploee.config import Settings
 from vossploee.main import create_app
 
+_TEST_API_KEY = "1012802"
+
 
 def _build_client(tmp_path: Path) -> TestClient:
     settings = Settings(
@@ -17,9 +19,10 @@ def _build_client(tmp_path: Path) -> TestClient:
         poll_interval_seconds=0.05,
         agent_model="test",
         enabled_capabilities=["core"],
+        api_key=_TEST_API_KEY,
     )
     app = create_app(settings)
-    return TestClient(app)
+    return TestClient(app, headers={"X-API-KEY": _TEST_API_KEY})
 
 
 def test_task_flow_archives_finished_tree_to_tasklog(tmp_path: Path) -> None:
@@ -88,6 +91,36 @@ def test_log_empty_database_defaults(tmp_path: Path) -> None:
         assert r.json() == []
 
 
+def test_api_key_missing_returns_401(tmp_path: Path) -> None:
+    settings = Settings(
+        database_path=tmp_path / "test-tasks.db",
+        poll_interval_seconds=0.05,
+        agent_model="test",
+        enabled_capabilities=["core"],
+        api_key=_TEST_API_KEY,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        r = client.get("/health")
+        assert r.status_code == 401
+        assert r.json()["detail"] == "Not authenticated"
+
+
+def test_api_key_wrong_returns_403(tmp_path: Path) -> None:
+    settings = Settings(
+        database_path=tmp_path / "test-tasks.db",
+        poll_interval_seconds=0.05,
+        agent_model="test",
+        enabled_capabilities=["core"],
+        api_key=_TEST_API_KEY,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        r = client.get("/health", headers={"X-API-KEY": "wrong"})
+        assert r.status_code == 403
+        assert r.json()["detail"] == "Forbidden"
+
+
 def test_unknown_capability_is_rejected(tmp_path: Path) -> None:
     settings = Settings(
         database_path=tmp_path / "test-tasks.db",
@@ -106,9 +139,10 @@ def test_capabilities_endpoint_returns_metadata(tmp_path: Path) -> None:
         poll_interval_seconds=0.05,
         agent_model="test",
         enabled_capabilities=["core", "brainstormer"],
+        api_key=_TEST_API_KEY,
     )
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-API-KEY": _TEST_API_KEY}) as client:
         response = client.get("/api/capabilities")
         assert response.status_code == 200
         payload = response.json()
@@ -120,6 +154,8 @@ def test_capabilities_endpoint_returns_metadata(tmp_path: Path) -> None:
         assert by_id["core"]["tools"] == [
             "core.imap",
             "core.queue_delete",
+            "core.queue_delete_batch",
+            "core.queue_delete_batch_resolved",
             "core.queue_defer",
         ]
         assert by_id["brainstormer"]["tools"] == []

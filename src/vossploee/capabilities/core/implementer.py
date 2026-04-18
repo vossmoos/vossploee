@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from vossploee.capabilities.base import AgentModuleSpec, PydanticTaskWorker
+from vossploee.capabilities.core.queue_tools import parse_removal_task_ids_from_description
 from vossploee.capabilities.core.worker_tool_context import (
     CoreWorkerToolContext,
     reset_core_tool_context,
@@ -37,9 +38,13 @@ class CoreImplementerWorker(PydanticTaskWorker[ImplementationResult]):
                     "(from task text or `scheduled_at`). Never defer by rolling forward one minute at a "
                     "time, never use 'now + 1 minute', and never defer repeatedly to slide the time—doing "
                     "that causes an infinite defer loop.\n\n"
-                    "Deletion: if the user gives a direct instruction to remove, cancel, or delete a "
-                    "specific queue01 task (root business task), call `core_queue_delete` with that "
-                    "task id. Do not delete without an explicit removal instruction tied to a queue01 id.\n\n"
+                    "Deletion: read the Planner’s task. If title is `[Task removal]` or the description "
+                    "contains `REMOVAL_TASK_IDS:` with comma-separated queue01 root ids, call "
+                    "`core_queue_delete_batch_resolved` with those ids (deletes roots for **any** "
+                    "capability). For a single id you may use `core_queue_delete` only when that id "
+                    "belongs to the current capability; otherwise prefer `core_queue_delete_batch_resolved`. "
+                    "Parse ids from the Planner’s text yourself; do not delete without explicit ids. "
+                    "If no deletion was requested, do not call delete tools.\n\n"
                     "Respond with a short summary of what you did and an artifact field that captures "
                     "the real output (sent message, drafted content, result of a check, etc.). If you "
                     "only deferred or deleted, explain that in summary and put details in artifact.\n\n"
@@ -62,7 +67,8 @@ class CoreImplementerWorker(PydanticTaskWorker[ImplementationResult]):
                 else "not set (run as soon as claimed)"
             )
             result = await self.run_prompt(
-                "Execute this doable action and report results.\n"
+                "The Planner left you a single queue02 task. Read title, description, and Gherkin; "
+                "decide which tools apply, then execute.\n"
                 f"Capability: {task.capability_name}\n"
                 f"Title: {task.title}\n"
                 f"Description: {task.description}\n"
@@ -71,6 +77,18 @@ class CoreImplementerWorker(PydanticTaskWorker[ImplementationResult]):
                 "not set or current UTC is at or after it, perform the action now; do not defer.\n"
                 f"Execution outline (Gherkin):\n{task.gherkin or ''}"
             )
+            removal_ids = parse_removal_task_ids_from_description(task.description)
+            if removal_ids:
+                still = [tid for tid in removal_ids if await repository.get_task(tid) is not None]
+                if still:
+                    ok_n, msgs = await repository.delete_queue01_roots_by_ids(task_ids=still)
+                    result = ImplementationResult(
+                        summary=(
+                            f"{result.summary}\n\nPost-check: applied deletion for {ok_n} queue01 root(s) "
+                            "that were still present."
+                        ),
+                        artifact=f"{result.artifact}\n\n---\nDeletion log:\n" + "\n".join(msgs),
+                    )
             refreshed = await repository.get_task(task.id)
             if refreshed is None:
                 return

@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     """Comma-separated capability ids, or empty to enable every discovered capability package."""
     enabled_capabilities: Annotated[list[str], NoDecode] = Field(default_factory=list)
     api_prefix: str = "/api"
+    api_key: str = Field(
+        default="1012802",
+        description="Every request must send X-API-KEY matching this value (401 if missing, 403 if wrong).",
+    )
     max_decomposed_roots: int = Field(
         default=168,
         ge=1,

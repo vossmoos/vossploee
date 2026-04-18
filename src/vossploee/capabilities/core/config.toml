@@ -2,7 +2,13 @@
 # model = "gpt-4o"
 
 # Qualified tool ids (namespace.tool). Other capabilities can reuse entries, e.g. "core.imap".
-tools = ["core.imap", "core.queue_delete", "core.queue_defer"]
+tools = [
+    "core.imap",
+    "core.queue_delete",
+    "core.queue_delete_batch",
+    "core.queue_delete_batch_resolved",
+    "core.queue_defer",
+]
 
 # Mail endpoints for the core.imap tool — SSL. The tool only sends mail (SMTP); host/port below
 # document Zoho IMAP for reference. Secrets are not stored here: set env vars per user_env / password_env.

@@ -11,7 +11,8 @@ from vossploee.capabilities.loader import (
 from vossploee.agent_context import with_datetime_context
 from vossploee.config import Settings
 from vossploee.errors import AgentExecutionError
-from vossploee.models import DecomposedPlan, DecomposedRootTask
+from vossploee.models import DecomposedPlan, DecomposedRootTask, TaskQueuePolicy
+from vossploee.task_queue_intent import decomposer_root_should_use_lifo
 
 
 class DecomposerAgentService:
@@ -32,6 +33,26 @@ class DecomposerAgentService:
                 "request. You output `roots`: one or more queue01 root tasks.\n\n"
                 "Default: use exactly ONE root with a concise `title`, clear `description`, and the "
                 "best-matching `capability_name`. Omit `scheduled_at` so it runs as soon as possible.\n\n"
+                "Multiple roots: if the request genuinely needs **different** kinds of work, emit **one "
+                "or more** queue01 roots—either several under the **same** capability (e.g. scheduled "
+                "monitoring runs) or roots assigned to **different** capabilities when the user’s ask "
+                "clearly combines unrelated domains. Each root is independent input for that capability’s "
+                "Architect later.\n\n"
+                "Choosing `capability_name`: reason about **intent**, not keyword matching. Domain work "
+                "(e.g. search Upwork, draft applies, brainstorm product ideas) belongs to the matching "
+                "domain capability (`upworkmanager`, `brainstormer`, …). **Meta-requests about the task "
+                "system itself**—cancel/remove/prune queued work that belongs to **another** "
+                "capability, clear a scheduler of foreign jobs, or operate on the queue as "
+                "infrastructure—belong to **`core`**. In the root `title`/`description`, state the target "
+                "explicitly (e.g. which capability’s queue01 roots to remove, date filters, “all "
+                "upworkmanager monitors”). Example: “Remove all Upwork tasks from the scheduler” → "
+                "**one** `core` root whose description says to remove all pending queue01 roots where "
+                "the work is for `upworkmanager` (not an `upworkmanager` root—that would run the "
+                "Upwork Architect instead of platform cleanup).\n\n"
+                "Queue policy (`queue_policy`, default `fifo`): workers use it when claiming queue01 "
+                "roots: pending `lifo` roots run before any pending `fifo` root; among `lifo`, newest "
+                "first; among `fifo`, oldest first. Set `queue_policy` to `lifo` when this root must be "
+                "processed **before** older fifo work (e.g. urgent cancel/clear-queue style requests).\n\n"
                 "Recurring / scheduled monitoring (e.g. “check Upwork every hour for 24 hours”, "
                 "“run this N times once per hour”): emit MULTIPLE roots with the SAME "
                 "`capability_name` (usually `upworkmanager` for Upwork). Give each root a distinct "
@@ -61,7 +82,10 @@ class DecomposerAgentService:
                 if r.capability_name in self._allowed_capability_ids
                 else self._fallback_capability_id
             )
-            fixed.append(r.model_copy(update={"capability_name": cap}))
+            updates: dict[str, object] = {"capability_name": cap}
+            if decomposer_root_should_use_lifo(r.title, r.description):
+                updates["queue_policy"] = TaskQueuePolicy.LIFO
+            fixed.append(r.model_copy(update=updates))
         return DecomposedPlan(roots=fixed)
 
     async def decompose(self, *, description: str) -> DecomposedPlan:

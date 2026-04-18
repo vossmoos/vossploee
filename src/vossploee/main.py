@@ -6,6 +6,9 @@ from typing import Annotated
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Response, status
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from vossploee.agents import AgentRegistry
 from vossploee.config import Settings, get_settings
@@ -22,6 +25,26 @@ from vossploee.models import (
 )
 from vossploee.repository import TaskRepository
 from vossploee.workers import WorkerManager
+
+
+class ApiKeyMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, *, expected_key: str) -> None:
+        super().__init__(app)
+        self.expected_key = expected_key
+
+    async def dispatch(self, request: Request, call_next):
+        supplied = (request.headers.get("x-api-key") or "").strip()
+        if not supplied:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "Not authenticated"},
+            )
+        if supplied != self.expected_key:
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "Forbidden"},
+            )
+        return await call_next(request)
 
 
 @dataclass
@@ -54,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await workers.stop()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
+    app.add_middleware(ApiKeyMiddleware, expected_key=app_settings.api_key)
     app.state.services = AppState(
         settings=app_settings,
         database=database,
@@ -89,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 agent_name=AgentName.DECOMPOSER,
                 capability_name=root.capability_name,
                 scheduled_at=root.scheduled_at,
+                queue_policy=root.queue_policy,
             )
             created.append(task)
         return created

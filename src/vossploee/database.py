@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TEXT NOT NULL,
     claimed_at TEXT,
     completed_at TEXT,
-    scheduled_at TEXT
+    scheduled_at TEXT,
+    queue_policy TEXT NOT NULL DEFAULT 'fifo' CHECK (queue_policy IN ('fifo', 'lifo'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
@@ -49,6 +50,17 @@ CREATE TABLE IF NOT EXISTS upwork_processed_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_upwork_processed_at ON upwork_processed_jobs(processed_at);
+
+-- Singleton row (id=1) holding the latest Upwork OAuth2 tokens. Upwork rotates the
+-- refresh_token on every /oauth2/token call, so we must persist the rotated value back
+-- or the next refresh fails with `invalid_grant` and forces a new browser flow.
+CREATE TABLE IF NOT EXISTS upwork_oauth_tokens (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    access_token TEXT NOT NULL,
+    refresh_token TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -88,6 +100,13 @@ class Database:
         if "scheduled_at" not in columns:
             await conn.execute("ALTER TABLE tasks ADD COLUMN scheduled_at TEXT")
 
+        cursor = await conn.execute("PRAGMA table_info(tasks)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "queue_policy" not in columns:
+            await conn.execute(
+                "ALTER TABLE tasks ADD COLUMN queue_policy TEXT NOT NULL DEFAULT 'fifo'"
+            )
+
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_at)"
         )
@@ -121,5 +140,21 @@ class Database:
                     processed_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_upwork_processed_at ON upwork_processed_jobs(processed_at);
+                """
+            )
+
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='upwork_oauth_tokens'"
+        )
+        if await cursor.fetchone() is None:
+            await conn.executescript(
+                """
+                CREATE TABLE upwork_oauth_tokens (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    access_token TEXT NOT NULL,
+                    refresh_token TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )

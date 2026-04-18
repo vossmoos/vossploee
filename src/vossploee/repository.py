@@ -11,6 +11,7 @@ from vossploee.models import (
     TaskKind,
     TaskLogEntry,
     TaskQueue,
+    TaskQueuePolicy,
     TaskRecord,
     TaskStatus,
     TaskTree,
@@ -29,6 +30,7 @@ class TaskRepository:
         agent_name: AgentName,
         capability_name: str,
         scheduled_at: datetime | None = None,
+        queue_policy: TaskQueuePolicy = TaskQueuePolicy.FIFO,
     ) -> TaskRecord:
         task_id = str(uuid4())
         now = self._now()
@@ -39,8 +41,9 @@ class TaskRepository:
                 """
                 INSERT INTO tasks (
                     id, parent_id, root_id, title, description, queue_name, task_kind,
-                    status, agent_name, capability_name, created_at, updated_at, scheduled_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, agent_name, capability_name, created_at, updated_at, scheduled_at,
+                    queue_policy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
@@ -56,6 +59,7 @@ class TaskRepository:
                     now,
                     now,
                     sched,
+                    queue_policy.value,
                 ),
             )
             await conn.commit()
@@ -82,8 +86,8 @@ class TaskRepository:
                     INSERT INTO tasks (
                         id, parent_id, root_id, title, description, queue_name, task_kind,
                         status, agent_name, capability_name, gherkin, created_at, updated_at,
-                        scheduled_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        scheduled_at, queue_policy
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_id,
@@ -100,6 +104,7 @@ class TaskRepository:
                         now,
                         now,
                         sched,
+                        task.queue_policy.value,
                     ),
                 )
             await conn.commit()
@@ -159,6 +164,68 @@ class TaskRepository:
 
         return [self._to_record(row) for row in rows]
 
+    async def list_queue01_tasks_all_capabilities(
+        self,
+        *,
+        search: str | None = None,
+    ) -> list[TaskRecord]:
+        """All queue01 roots across capabilities (for platform / core orchestration)."""
+        async with self.database.connection() as conn:
+            if search and search.strip():
+                like = f"%{search.strip()}%"
+                cursor = await conn.execute(
+                    """
+                    SELECT * FROM tasks
+                    WHERE queue_name = ?
+                      AND (title LIKE ? OR description LIKE ?)
+                    ORDER BY capability_name ASC, created_at ASC, id ASC
+                    """,
+                    (TaskQueue.QUEUE01, like, like),
+                )
+            else:
+                cursor = await conn.execute(
+                    """
+                    SELECT * FROM tasks
+                    WHERE queue_name = ?
+                    ORDER BY capability_name ASC, created_at ASC, id ASC
+                    """,
+                    (TaskQueue.QUEUE01,),
+                )
+            rows = await cursor.fetchall()
+
+        return [self._to_record(row) for row in rows]
+
+    async def delete_queue01_roots_by_ids(
+        self,
+        *,
+        task_ids: list[str],
+    ) -> tuple[int, list[str]]:
+        """Delete queue01 roots by id regardless of capability (each row's subtree removed)."""
+        messages: list[str] = []
+        ok_n = 0
+        seen: set[str] = set()
+        for raw in task_ids:
+            tid = (raw or "").strip()
+            if not tid or tid in seen:
+                continue
+            seen.add(tid)
+            task = await self.get_task(tid)
+            if task is None:
+                messages.append(f"{tid!r}: not found.")
+                continue
+            if task.queue_name != TaskQueue.QUEUE01:
+                messages.append(f"{tid!r}: not a queue01 root.")
+                continue
+            deleted = await self.delete_task_tree(tid)
+            if deleted:
+                ok_n += 1
+                messages.append(
+                    f"{tid!r}: deleted queue01 root ({task.capability_name!r}) and subtree."
+                )
+            else:  # pragma: no cover - defensive
+                messages.append(f"{tid!r}: delete failed.")
+        return ok_n, messages
+
     async def delete_queue01_task(
         self,
         *,
@@ -176,6 +243,29 @@ class TaskRepository:
         if not deleted:  # pragma: no cover - defensive
             return False, "Delete failed."
         return True, f"Deleted queue01 task {task_id!r} and all of its child tasks."
+
+    async def delete_queue01_tasks_batch(
+        self,
+        *,
+        task_ids: list[str],
+        capability_name: str,
+    ) -> tuple[int, list[str]]:
+        """Delete multiple queue01 roots (each subtree). Returns (success_count, per-id messages)."""
+        messages: list[str] = []
+        ok_n = 0
+        seen: set[str] = set()
+        for raw in task_ids:
+            tid = (raw or "").strip()
+            if not tid or tid in seen:
+                continue
+            seen.add(tid)
+            ok, msg = await self.delete_queue01_task(
+                task_id=tid, capability_name=capability_name
+            )
+            if ok:
+                ok_n += 1
+            messages.append(msg)
+        return ok_n, messages
 
     async def defer_queue02_task(
         self,
@@ -290,21 +380,33 @@ class TaskRepository:
         capability_name: str,
     ) -> TaskRecord | None:
         now = self._now()
+        # Claim all pending LIFO tasks (newest first) before any FIFO task (oldest first).
+        # See TaskQueuePolicy on TaskRecord / DecomposedRootTask / ArchitectTask.
+        base_where = """
+                WHERE queue_name = ? AND status = ? AND capability_name = ?
+                  AND (scheduled_at IS NULL OR scheduled_at <= ?)
+                  AND COALESCE(queue_policy, 'fifo') = ?
+                """
 
         async with self.database.connection() as conn:
             await conn.execute("BEGIN IMMEDIATE")
-            cursor = await conn.execute(
-                """
-                SELECT id
-                FROM tasks
-                WHERE queue_name = ? AND status = ? AND capability_name = ?
-                  AND (scheduled_at IS NULL OR scheduled_at <= ?)
-                ORDER BY created_at ASC, id ASC
-                LIMIT 1
-                """,
-                (queue_name, TaskStatus.PENDING, capability_name, now),
-            )
-            row = await cursor.fetchone()
+            row = None
+            for policy in (TaskQueuePolicy.LIFO, TaskQueuePolicy.FIFO):
+                order_created = "DESC" if policy == TaskQueuePolicy.LIFO else "ASC"
+                order_id = "DESC" if policy == TaskQueuePolicy.LIFO else "ASC"
+                cursor = await conn.execute(
+                    f"""
+                    SELECT id
+                    FROM tasks
+                    {base_where}
+                    ORDER BY created_at {order_created}, id {order_id}
+                    LIMIT 1
+                    """,
+                    (queue_name, TaskStatus.PENDING, capability_name, now, policy.value),
+                )
+                row = await cursor.fetchone()
+                if row is not None:
+                    break
 
             if row is None:
                 await conn.rollback()
