@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from vossploee.capabilities.base import AgentModuleSpec, PydanticTaskWorker
+from vossploee.capabilities.core.worker_tool_context import (
+    CoreWorkerToolContext,
+    reset_core_tool_context,
+    set_core_tool_context,
+)
 from vossploee.config import Settings
 from vossploee.models import AgentName, ImplementationResult, TaskQueue, TaskRecord
 from vossploee.repository import TaskRepository
@@ -27,14 +32,22 @@ class BrainstormerImplementerWorker(PydanticTaskWorker[ImplementationResult]):
         )
 
     async def handle(self, *, task: TaskRecord, repository: TaskRepository) -> None:
-        result = await self.run_prompt(
-            "Develop this idea branch into a concise brief.\n"
-            f"Capability: {task.capability_name}\n"
-            f"Idea title: {task.title}\n"
-            f"Notes: {task.description}\n"
-            f"Scenario outline:\n{task.gherkin or ''}"
+        token = set_core_tool_context(
+            CoreWorkerToolContext(
+                repository, task.capability_name, task.id, settings=self._settings
+            )
         )
-        await repository.complete_task(
-            task.id,
-            result=f"{result.summary}\n\nArtifact:\n{result.artifact}",
-        )
+        try:
+            result = await self.run_prompt(
+                "Develop this idea branch into a concise brief.\n"
+                f"Capability: {task.capability_name}\n"
+                f"Idea title: {task.title}\n"
+                f"Notes: {task.description}\n"
+                f"Scenario outline:\n{task.gherkin or ''}"
+            )
+            await repository.complete_task(
+                task.id,
+                result=f"{result.summary}\n\nArtifact:\n{result.artifact}",
+            )
+        finally:
+            reset_core_tool_context(token)

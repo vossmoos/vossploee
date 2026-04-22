@@ -8,13 +8,21 @@ from typing import Annotated
 from dotenv import load_dotenv
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from vossploee.models import AgentName
 
 
 class Settings(BaseSettings):
     app_name: str = "Vossploee Task Orchestrator"
     database_path: Path = Field(default=Path("data/tasks.db"))
+    chroma_path: Path = Field(
+        default=Path("data/chroma"),
+        description="Directory for ChromaDB persistent storage (long-term agent memory).",
+    )
     poll_interval_seconds: float = Field(default=1.0, ge=0.05)
     agent_model: str | None = None
+    decomposer_model: str | None = "openai:gpt-5.4-mini"
+    architect_model: str | None = "openai:gpt-5.4"
+    implementer_model: str | None = "openai:gpt-5.4-nano"
     """Comma-separated capability ids, or empty to enable every discovered capability package."""
     enabled_capabilities: Annotated[list[str], NoDecode] = Field(default_factory=list)
     api_prefix: str = "/api"
@@ -56,6 +64,15 @@ class Settings(BaseSettings):
         if isinstance(value, list):
             return [str(item).strip() for item in value if str(item).strip()]
         raise TypeError("enabled_capabilities must be a list or comma-separated string")
+
+    def model_for_agent(self, agent_name: AgentName) -> str | None:
+        if agent_name == AgentName.DECOMPOSER:
+            return self.decomposer_model or self.agent_model
+        if agent_name == AgentName.ARCHITECT:
+            return self.architect_model or self.agent_model
+        if agent_name == AgentName.IMPLEMENTER:
+            return self.implementer_model or self.agent_model
+        return self.agent_model
 
 
 @lru_cache(maxsize=1)

@@ -19,6 +19,8 @@ def test_core_imap_registers_after_bootstrap() -> None:
     assert is_registered("core.imap")
     assert is_registered("core.queue_list_all")
     assert is_registered("core.queue_delete_batch_resolved")
+    assert is_registered("core.memory_remember")
+    assert is_registered("core.memory_recall")
     assert is_registered("upworkmanager.search_jobs")
 
 
@@ -38,6 +40,7 @@ def test_unknown_tool_in_capability_config_fails_startup(tmp_path: Path) -> None
         poll_interval_seconds=0.05,
         agent_model="test",
         enabled_capabilities=["core"],
+        openai_api_key="",
     )
 
     bad = CapabilitySettings("core", None, ("not.registered.tool",))
@@ -61,3 +64,5 @@ def test_upworkmanager_settings_defaults_are_available() -> None:
     assert cfg.architect_prompt is not None
     assert 1 <= cfg.upwork.search_defaults.minutes <= 1440
     assert 1 <= cfg.upwork.search_defaults.limit <= 50
+    assert "core.memory_remember" in cfg.tools
+    assert "core.memory_recall" in cfg.tools

@@ -58,7 +58,9 @@ class CoreImplementerWorker(PydanticTaskWorker[ImplementationResult]):
 
     async def handle(self, *, task: TaskRecord, repository: TaskRepository) -> None:
         token = set_core_tool_context(
-            CoreWorkerToolContext(repository, task.capability_name, task.id)
+            CoreWorkerToolContext(
+                repository, task.capability_name, task.id, settings=self._settings
+            )
         )
         try:
             sched = (

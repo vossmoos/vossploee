@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import AbstractCapability as PydanticAgentCapability
 
-from vossploee.agent_context import with_datetime_context
+from vossploee.agent_context import (
+    with_datetime_context,
+    with_long_term_memory_tools_blueprint,
+)
 from vossploee.capabilities.capability_settings import load_capability_settings
 from vossploee.config import Settings
 from vossploee.errors import AgentExecutionError
@@ -49,12 +52,17 @@ class PydanticTaskWorker(TaskWorker, Generic[OutputT], ABC):
         include_capability_tools: bool = True,
     ) -> None:
         cap_cfg = load_capability_settings(capability_name)
-        self._model_name = cap_cfg.model or settings.agent_model
+        self._settings = settings
+        self._model_name = cap_cfg.model or settings.model_for_agent(self.role_name)
         self._role_label = spec.name
         capability_tools = (
             resolve_tools(cap_cfg.tools) if include_capability_tools else ()
         )
         combined_tools = tuple(spec.tools) + capability_tools
+        tool_names = {getattr(t, "name", None) for t in combined_tools}
+        self._memory_tools_blueprint_enabled = (
+            "core_memory_recall" in tool_names or "core_memory_remember" in tool_names
+        )
         self.agent = Agent(
             model=self._model_name,
             output_type=spec.output_type,
@@ -69,7 +77,12 @@ class PydanticTaskWorker(TaskWorker, Generic[OutputT], ABC):
         if not self._model_name:
             raise AgentExecutionError(f"{self._role_label} agent model is not configured.")
 
-        result = await self.agent.run(with_datetime_context(prompt))
+        body = (
+            with_long_term_memory_tools_blueprint(prompt)
+            if self._memory_tools_blueprint_enabled
+            else prompt
+        )
+        result = await self.agent.run(with_datetime_context(body))
         return result.output
 
 

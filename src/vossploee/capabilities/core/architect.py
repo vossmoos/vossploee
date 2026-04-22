@@ -131,7 +131,14 @@ class CoreArchitectWorker(PydanticTaskWorker[ArchitectPlan]):
                     "before older fifo queue02 work (e.g. urgent removal). Default is `fifo`.\n\n"
                     "The Implementer runs tools (e.g. email) on queue02."
                 ),
-                tools=resolve_tools(["core.queue_list", "core.queue_list_all"]),
+                tools=resolve_tools(
+                    [
+                        "core.queue_list",
+                        "core.queue_list_all",
+                        "core.memory_remember",
+                        "core.memory_recall",
+                    ]
+                ),
             ),
             capability_name="core",
             include_capability_tools=False,
@@ -139,7 +146,7 @@ class CoreArchitectWorker(PydanticTaskWorker[ArchitectPlan]):
 
     async def handle(self, *, task: TaskRecord, repository: TaskRepository) -> None:
         token = set_core_tool_context(
-            CoreWorkerToolContext(repository, task.capability_name, None)
+            CoreWorkerToolContext(repository, task.capability_name, None, settings=self._settings)
         )
         try:
             plan = await self.run_prompt(

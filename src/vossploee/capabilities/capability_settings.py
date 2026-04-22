@@ -13,6 +13,15 @@ _CAP_FILE = "config.toml"
 # When config.toml is missing, use these defaults (per capability id).
 _DEFAULT_TOOLS: dict[str, tuple[str, ...]] = {
     "core": ("core.imap",),
+    # Mirrors typical local upworkmanager allowlist when `tools` is omitted from config.toml.
+    "upworkmanager": (
+        "upworkmanager.search_jobs",
+        "core.imap",
+        "core.queue_delete",
+        "core.queue_delete_batch",
+        "core.memory_remember",
+        "core.memory_recall",
+    ),
 }
 
 

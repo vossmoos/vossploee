@@ -7,19 +7,37 @@ import pytest
 from fastapi.testclient import TestClient
 
 from vossploee.capabilities import CapabilityConfigurationError
-from vossploee.config import Settings
+from vossploee.config import Settings, get_settings
 from vossploee.main import create_app
 
 _TEST_API_KEY = "test-x-api-key"
+# Role-specific defaults in Settings otherwise still point at real provider ids.
+_TEST_MODELS = {
+    "agent_model": "test",
+    "decomposer_model": "test",
+    "architect_model": "test",
+    "implementer_model": "test",
+}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_openai_env_for_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Project ``.env`` can set OPENAI_API_KEY; isolate so memory tools do not call OpenAI in tests."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("VOSSPLOEE_OPENAI_API_KEY", raising=False)
+    get_settings.cache_clear()
 
 
 def _build_client(tmp_path: Path) -> TestClient:
     settings = Settings(
         database_path=tmp_path / "test-tasks.db",
+        chroma_path=tmp_path / "chroma",
         poll_interval_seconds=0.05,
-        agent_model="test",
         enabled_capabilities=["core"],
         api_key=_TEST_API_KEY,
+        **_TEST_MODELS,
     )
     app = create_app(settings)
     return TestClient(app, headers={"X-API-KEY": _TEST_API_KEY})
@@ -46,7 +64,8 @@ def test_task_flow_archives_finished_tree_to_tasklog(tmp_path: Path) -> None:
         assert root_task["agent_name"] == "Decomposer"
         assert root_task["capability_name"] == "core"
 
-        deadline = time.time() + 5
+        # Allow time for first Chroma embedding model download on cold machines.
+        deadline = time.time() + 120
         log_entries: list[dict] = []
         while time.time() < deadline:
             log_response = client.get("/api/tasklog")
@@ -95,9 +114,9 @@ def test_api_key_missing_returns_401(tmp_path: Path) -> None:
     settings = Settings(
         database_path=tmp_path / "test-tasks.db",
         poll_interval_seconds=0.05,
-        agent_model="test",
         enabled_capabilities=["core"],
         api_key=_TEST_API_KEY,
+        **_TEST_MODELS,
     )
     app = create_app(settings)
     with TestClient(app) as client:
@@ -110,9 +129,9 @@ def test_api_key_empty_skips_http_key_check(tmp_path: Path) -> None:
     settings = Settings(
         database_path=tmp_path / "test-tasks.db",
         poll_interval_seconds=0.05,
-        agent_model="test",
         enabled_capabilities=["core"],
         api_key="",
+        **_TEST_MODELS,
     )
     app = create_app(settings)
     with TestClient(app) as client:
@@ -125,9 +144,9 @@ def test_api_key_wrong_returns_403(tmp_path: Path) -> None:
     settings = Settings(
         database_path=tmp_path / "test-tasks.db",
         poll_interval_seconds=0.05,
-        agent_model="test",
         enabled_capabilities=["core"],
         api_key=_TEST_API_KEY,
+        **_TEST_MODELS,
     )
     app = create_app(settings)
     with TestClient(app) as client:
@@ -140,8 +159,8 @@ def test_unknown_capability_is_rejected(tmp_path: Path) -> None:
     settings = Settings(
         database_path=tmp_path / "test-tasks.db",
         poll_interval_seconds=0.05,
-        agent_model="test",
         enabled_capabilities=["missing-capability"],
+        **_TEST_MODELS,
     )
 
     with pytest.raises(CapabilityConfigurationError, match="Unknown capability id"):
@@ -151,10 +170,11 @@ def test_unknown_capability_is_rejected(tmp_path: Path) -> None:
 def test_capabilities_endpoint_returns_metadata(tmp_path: Path) -> None:
     settings = Settings(
         database_path=tmp_path / "test-tasks.db",
+        chroma_path=tmp_path / "chroma",
         poll_interval_seconds=0.05,
-        agent_model="test",
         enabled_capabilities=["core", "brainstormer"],
         api_key=_TEST_API_KEY,
+        **_TEST_MODELS,
     )
     app = create_app(settings)
     with TestClient(app, headers={"X-API-KEY": _TEST_API_KEY}) as client:
@@ -172,5 +192,7 @@ def test_capabilities_endpoint_returns_metadata(tmp_path: Path) -> None:
             "core.queue_delete_batch",
             "core.queue_delete_batch_resolved",
             "core.queue_defer",
+            "core.memory_remember",
+            "core.memory_recall",
         ]
-        assert by_id["brainstormer"]["tools"] == []
+        assert by_id["brainstormer"]["tools"] == ["core.memory_remember", "core.memory_recall"]

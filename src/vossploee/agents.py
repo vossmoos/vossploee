@@ -11,13 +11,13 @@ from vossploee.capabilities.loader import (
 from vossploee.agent_context import with_datetime_context
 from vossploee.config import Settings
 from vossploee.errors import AgentExecutionError
-from vossploee.models import DecomposedPlan, DecomposedRootTask, TaskQueuePolicy
+from vossploee.models import AgentName, DecomposedPlan, DecomposedRootTask, TaskQueuePolicy
 from vossploee.task_queue_intent import decomposer_root_should_use_lifo
 
 
 class DecomposerAgentService:
     def __init__(self, settings: Settings) -> None:
-        self.model_name = settings.agent_model
+        self.model_name = settings.model_for_agent(AgentName.DECOMPOSER)
         self._max_roots = settings.max_decomposed_roots
         infos = list_capability_infos(settings)
         self._allowed_capability_ids = [info.id for info in infos]
@@ -38,6 +38,17 @@ class DecomposerAgentService:
                 "monitoring runs) or roots assigned to **different** capabilities when the user’s ask "
                 "clearly combines unrelated domains. Each root is independent input for that capability’s "
                 "Architect later.\n\n"
+                "Long-term memory across roots: enabled capabilities may expose semantic memory tools to "
+                "their Architect / Implementer agents. Memory is **scoped per capability**—two different "
+                "`capability_name` values do not share the same store. When the user’s ask fits a **chain** "
+                "of work (e.g. one phase should leave durable notes, a later phase should use those notes "
+                "for an outcome such as outbound mail, a report, or a decision), you may plan **multiple** "
+                "queue01 roots, usually under the **same** capability so later agents can recall what "
+                "earlier agents stored. Make each root’s `title`/`description` explicit about that root’s "
+                "role in the chain; if order matters beyond normal queue ordering, say so and set "
+                "`scheduled_at` on later roots when they must wait for time, not only for fifo/lifo. "
+                "Downstream agents decide **when** to call remember/recall; you only split the user’s "
+                "intent into roots they can run.\n\n"
                 "Choosing `capability_name`: reason about **intent**, not keyword matching. Domain work "
                 "(e.g. search Upwork, draft applies, brainstorm product ideas) belongs to the matching "
                 "domain capability (`upworkmanager`, `brainstormer`, …). **Meta-requests about the task "
@@ -61,6 +72,10 @@ class DecomposerAgentService:
                 "when that run should start: typically consecutive hours from the current UTC time "
                 "in the prompt context (e.g. run 1 at +1h, run 2 at +2h, …). Do not exceed the implied "
                 f"number of runs (if the user asks for 24 hourly checks, emit 24 roots). "
+                "Do not invent a narrow time window in the root description (for example, "
+                "'last 10 minutes') unless the user explicitly asked for that value. For recurring "
+                "cadence requests, either omit explicit minutes in the root text or use a window that "
+                "is at least the cadence interval to avoid coverage gaps if it is needed for the user. "
                 f"Never emit more than {self._max_roots} roots in one response.\n\n"
                 "Valid capability ids (use the string exactly): "
                 f"{allowed}.\n\n"

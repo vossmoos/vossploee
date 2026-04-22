@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vossploee.repository import TaskRepository
+
+if TYPE_CHECKING:
+    from vossploee.config import Settings
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,6 +15,8 @@ class CoreWorkerToolContext:
     repository: TaskRepository
     capability_name: str
     current_task_id: str | None = None
+    # App settings for tools (e.g. Chroma path); None => tools may use get_settings().
+    settings: "Settings | None" = None
 
 
 _CTX: ContextVar[CoreWorkerToolContext | None] = ContextVar("core_worker_tool_ctx", default=None)

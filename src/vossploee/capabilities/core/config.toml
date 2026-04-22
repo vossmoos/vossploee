@@ -8,6 +8,8 @@ tools = [
     "core.queue_delete_batch",
     "core.queue_delete_batch_resolved",
     "core.queue_defer",
+    "core.memory_remember",
+    "core.memory_recall",
 ]
 
 # Mail endpoints for the core.imap tool — SSL. The tool only sends mail (SMTP); host/port below

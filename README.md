@@ -18,6 +18,7 @@ You can run a unit **on your laptop, a workstation, or any virtual machine** wit
 - **[aiosqlite](https://github.com/omnilib/aiosqlite)** — async SQLite
 - **SQLite** — durable task state and logs
 - **[uv](https://docs.astral.sh/uv/)** — project and lockfile (`uv.lock`)
+- **[ChromaDB](https://www.trychroma.com/)** (optional) — on-disk vector store for capability-scoped long-term memory when memory tools are enabled
 
 ## What Is In This Repo
 
@@ -32,6 +33,12 @@ Current capability packages:
 - **`brainstormer`** — generates idea branches and short strategy briefs
 
 Additional capability packages can be dropped into `src/vossploee/capabilities/` (each with its own `config.toml`, `README.md`, and `tools_register`) and enabled via `VOSSPLOEE_ENABLED_CAPABILITIES`. This is how a unit takes on new domain skills—for example, a **multi-omics EHR worker** that assembles a synthetic cohort for a downstream study.
+
+## Long-term memory
+
+Capabilities can opt in to **semantic long-term memory** by listing the shared tools `core.memory_remember` and `core.memory_recall` in that capability’s `config.toml` tool allowlist (see `core` and `brainstormer` packages for examples). Embeddings use OpenAI **`text-embedding-3-large`**; set **`OPENAI_API_KEY`** or **`VOSSPLOEE_OPENAI_API_KEY`**. Vectors and metadata live under **`VOSSPLOEE_CHROMA_PATH`** (default `data/chroma`); the Decomposer does not use these tools.
+
+**How it works:** each stored row is tied to the **current capability** only—`core` and `brainstormer` (or another enabled capability) do not share the same memory namespace. The **Architect** and **Implementer** agents may call the tools when they choose: **`core_memory_remember`** persists labeled text (`memory_kind` is one of: `note`, `preference`, `outcome`, `fact`, `task_result`, `research`, `misc`), and **`core_memory_recall`** runs semantic search over that capability’s memories. **No stored content is injected into prompts automatically**; the only automatic addition for agents that have memory tools is a short **structural blueprint** (scope, kinds, tool names) prepended with the usual UTC time context in `PydanticTaskWorker.run_prompt`, so the model knows the contract before it decides to call the tools.
 
 ## Quick Start
 
@@ -48,9 +55,14 @@ cp default.env .env
 ```
 
 3. Fill required values in `.env`:
-- `VOSSPLOEE_AGENT_MODEL` (for real model runs — public or private provider, depending on the model id and env)
-- provider keys (for example `OPENAI_API_KEY` when using a hosted model)
+- `VOSSPLOEE_AGENT_MODEL` (base model for all roles; required unless all role-specific models below are set)
+- optional role-specific model overrides:
+  - `VOSSPLOEE_DECOMPOSER_MODEL`
+  - `VOSSPLOEE_ARCHITECT_MODEL`
+  - `VOSSPLOEE_IMPLEMENTER_MODEL`
+- provider keys (for example `OPENAI_API_KEY` when using a hosted model; required for memory embeddings if memory tools are enabled)
 - `VOSSPLOEE_API_KEY` — after copying `default.env`, your `.env` includes an example shared secret; clients must send matching `X-API-KEY` (clear the value in `.env` only if you fully trust network isolation; not recommended for exposed hosts)
+- optional `VOSSPLOEE_CHROMA_PATH` if you want long-term memory files outside the default `data/chroma`
 - capability credentials as needed (for example IMAP/SMTP for the `core` mail tool)
 
 4. Run the API:
@@ -96,11 +108,15 @@ Main settings (`.env`, prefix `VOSSPLOEE_`):
 
 - `VOSSPLOEE_APP_NAME` (default: `Vossploee Task Orchestrator`)
 - `VOSSPLOEE_DATABASE_PATH` (default: `data/tasks.db`)
+- `VOSSPLOEE_CHROMA_PATH` (default: `data/chroma` — long-term memory store when memory tools are used)
 - `VOSSPLOEE_POLL_INTERVAL_SECONDS` (default: `1`)
 - `VOSSPLOEE_API_PREFIX` (default: `/api`)
 - `VOSSPLOEE_API_KEY` — when set (see `default.env` after `cp` to `.env`), every request must send `X-API-KEY` (401/403 otherwise). Set **empty** in `.env` only to skip HTTP key checks on tightly isolated networks. Rotate the example value for production.
 - `VOSSPLOEE_MAX_DECOMPOSED_ROOTS` (default: `168`)
-- `VOSSPLOEE_AGENT_MODEL` (required for real runs; use `test` for offline/CI-style runs)
+- `VOSSPLOEE_AGENT_MODEL` (base fallback model; use `test` for offline/CI-style runs)
+- `VOSSPLOEE_DECOMPOSER_MODEL` (optional override for Decomposer role)
+- `VOSSPLOEE_ARCHITECT_MODEL` (optional override for Architect role)
+- `VOSSPLOEE_IMPLEMENTER_MODEL` (optional override for Implementer role)
 - `VOSSPLOEE_ENABLED_CAPABILITIES` (comma-separated ids, or empty for all discovered capabilities)
 
 Notes:

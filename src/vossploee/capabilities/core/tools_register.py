@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from vossploee.capabilities.core.imap_tool import imap_send_mail
+from vossploee.capabilities.core.memory_tools import memory_recall, memory_remember
 from vossploee.capabilities.core.queue_tools import (
     queue_defer_current_queue02,
     queue_delete_queue01,
@@ -71,6 +72,25 @@ def _register() -> None:
         description=(
             "Defer the current queue02 task: return it to pending until a future UTC time (ISO-8601). "
             "Use when the task must not run until that time (e.g. user-specified datetime not yet reached)."
+        ),
+    )
+    register_tool(
+        "core.memory_remember",
+        memory_remember,
+        description=(
+            "Store long-term memory for the current capability. `text` is embedded (OpenAI "
+            "text-embedding-3-large when configured) and returned on recall; metadata records capability_id, "
+            "memory_kind, and created (UTC). memory_kind must be one of: "
+            "note, preference, outcome, fact, task_result, research, misc."
+        ),
+    )
+    register_tool(
+        "core.memory_recall",
+        memory_recall,
+        description=(
+            "Semantic search over stored memories for the current capability only (same embedding model as "
+            "remember). Pass a natural-language `query` (topic/intent). Optional `memory_kind` filters to "
+            "the same enum as remember. `top_k` caps how many hits (default 8, max 50)."
         ),
     )
 
