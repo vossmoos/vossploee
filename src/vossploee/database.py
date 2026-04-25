@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS upwork_oauth_tokens (
     expires_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS newsroom_processed_articles (
+    article_url TEXT PRIMARY KEY NOT NULL,
+    processed_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_newsroom_processed_at ON newsroom_processed_articles(processed_at);
 """
 
 
@@ -156,5 +163,19 @@ class Database:
                     expires_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                """
+            )
+
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='newsroom_processed_articles'"
+        )
+        if await cursor.fetchone() is None:
+            await conn.executescript(
+                """
+                CREATE TABLE newsroom_processed_articles (
+                    article_url TEXT PRIMARY KEY NOT NULL,
+                    processed_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_newsroom_processed_at ON newsroom_processed_articles(processed_at);
                 """
             )

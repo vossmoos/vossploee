@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from vossploee.database import Database
@@ -75,11 +75,13 @@ class TaskRepository:
         parent: TaskRecord,
         tasks: list[ArchitectTask],
     ) -> list[TaskRecord]:
-        now = self._now()
+        # Siblings must have strictly increasing created_at so FIFO claim order matches the
+        # Architect's list order (otherwise ORDER BY created_at, id tie-breaks on random UUIDs).
+        child_timestamps = self._sequential_child_timestamps(len(tasks))
         child_ids = [str(uuid4()) for _ in tasks]
 
         async with self.database.connection() as conn:
-            for task_id, task in zip(child_ids, tasks, strict=True):
+            for task_id, task, created_at in zip(child_ids, tasks, child_timestamps, strict=True):
                 sched = self._dt_to_iso(task.scheduled_at)
                 await conn.execute(
                     """
@@ -101,8 +103,8 @@ class TaskRepository:
                         AgentName.ARCHITECT,
                         parent.capability_name,
                         task.gherkin,
-                        now,
-                        now,
+                        created_at,
+                        created_at,
                         sched,
                         task.queue_policy.value,
                     ),
@@ -488,7 +490,11 @@ class TaskRepository:
         return {str(r["job_id"]) for r in rows}
 
     async def mark_upwork_jobs_processed(self, job_ids: list[str]) -> None:
-        """Record Upwork job IDs (dedupe keys) so future searches can skip AI re-triage."""
+        """Record Upwork job IDs (dedupe keys) for **scheduled** monitor flows.
+
+        The upworkmanager Architect calls this only when the queue01 root has ``scheduled_at`` set
+        so one-off searches do not pollute the skip list.
+        """
         cleaned = [str(x).strip() for x in job_ids if str(x).strip()]
         if not cleaned:
             return
@@ -501,6 +507,38 @@ class TaskRepository:
                     VALUES (?, ?)
                     """,
                     (jid, now),
+                )
+            await conn.commit()
+
+    async def newsroom_article_urls_already_processed(self, urls: list[str]) -> set[str]:
+        """Return URLs already stored in ``newsroom_processed_articles`` (dedupe keys)."""
+        cleaned = [str(x).strip() for x in urls if str(x).strip()]
+        if not cleaned:
+            return set()
+        unique = list(dict.fromkeys(cleaned))
+        placeholders = ",".join("?" * len(unique))
+        async with self.database.connection() as conn:
+            cursor = await conn.execute(
+                f"SELECT article_url FROM newsroom_processed_articles WHERE article_url IN ({placeholders})",
+                unique,
+            )
+            rows = await cursor.fetchall()
+        return {str(r["article_url"]) for r in rows}
+
+    async def mark_newsroom_articles_processed(self, urls: list[str]) -> None:
+        """Record article page URLs after successful ingest into Chroma."""
+        cleaned = [str(x).strip() for x in urls if str(x).strip()]
+        if not cleaned:
+            return
+        now = self._now()
+        async with self.database.connection() as conn:
+            for u in dict.fromkeys(cleaned):
+                await conn.execute(
+                    """
+                    INSERT OR IGNORE INTO newsroom_processed_articles (article_url, processed_at)
+                    VALUES (?, ?)
+                    """,
+                    (u, now),
                 )
             await conn.commit()
 
@@ -562,6 +600,14 @@ class TaskRepository:
     @staticmethod
     def _now() -> str:
         return datetime.now(UTC).isoformat()
+
+    @staticmethod
+    def _sequential_child_timestamps(count: int) -> list[str]:
+        """Monotonic ISO timestamps for sibling queue02 rows (microsecond stride)."""
+        if count <= 0:
+            return []
+        base = datetime.now(UTC)
+        return [(base + timedelta(microseconds=i)).isoformat() for i in range(count)]
 
     @staticmethod
     def _dt_to_iso(value: datetime | None) -> str | None:

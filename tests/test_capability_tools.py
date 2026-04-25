@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -21,7 +22,11 @@ def test_core_imap_registers_after_bootstrap() -> None:
     assert is_registered("core.queue_delete_batch_resolved")
     assert is_registered("core.memory_remember")
     assert is_registered("core.memory_recall")
-    assert is_registered("upworkmanager.search_jobs")
+    assert is_registered("newsroom.news_monitor")
+    assert is_registered("newsroom.news_read")
+    assert is_registered("newsroom.news_translate")
+    if importlib.util.find_spec("vossploee.capabilities.upworkmanager") is not None:
+        assert is_registered("upworkmanager.search_jobs")
 
 
 def test_duplicate_registration_raises() -> None:
@@ -58,6 +63,7 @@ def test_unknown_tool_in_capability_config_fails_startup(tmp_path: Path) -> None
 
 
 def test_upworkmanager_settings_defaults_are_available() -> None:
+    pytest.importorskip("vossploee.capabilities.upworkmanager", reason="optional capability package")
     cfg = load_capability_settings("upworkmanager")
     assert cfg.upwork is not None
     assert cfg.upwork.api_key_env == "VOSSPLOEE_UPWORK_API_KEY"

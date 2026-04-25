@@ -4,6 +4,7 @@ import asyncio
 from contextlib import suppress
 
 from vossploee.agents import AgentRegistry
+from vossploee.capabilities.base import summarize_http_failure
 from vossploee.capabilities import TaskWorker
 from vossploee.config import Settings
 from vossploee.repository import TaskRepository
@@ -57,4 +58,9 @@ class WorkerManager:
             try:
                 await worker.handle(task=task, repository=self.repository)
             except Exception as exc:  # pragma: no cover - defensive worker safety
-                await self.repository.fail_task(task.id, error_message=str(exc))
+                raw = str(exc)
+                failure = summarize_http_failure(raw)
+                await self.repository.fail_task(
+                    task.id,
+                    error_message=failure or raw,
+                )

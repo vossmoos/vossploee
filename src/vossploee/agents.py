@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic_ai import Agent
 
 from vossploee.capabilities import CapabilityModule
+from vossploee.capabilities.base import summarize_http_failure
 from vossploee.capabilities.loader import (
     decomposer_capability_catalog_text,
     list_capability_infos,
@@ -50,8 +51,8 @@ class DecomposerAgentService:
                 "Downstream agents decide **when** to call remember/recall; you only split the user’s "
                 "intent into roots they can run.\n\n"
                 "Choosing `capability_name`: reason about **intent**, not keyword matching. Domain work "
-                "(e.g. search Upwork, draft applies, brainstorm product ideas) belongs to the matching "
-                "domain capability (`upworkmanager`, `brainstormer`, …). **Meta-requests about the task "
+                "(e.g. search Upwork, RSS/news monitoring and digests, brainstorm product ideas) belongs to the matching "
+                "domain capability (`upworkmanager`, `newsroom`, `brainstormer`, …). **Meta-requests about the task "
                 "system itself**—cancel/remove/prune queued work that belongs to **another** "
                 "capability, clear a scheduler of foreign jobs, or operate on the queue as "
                 "infrastructure—belong to **`core`**. In the root `title`/`description`, state the target "
@@ -107,12 +108,18 @@ class DecomposerAgentService:
         if not self.model_name:
             raise AgentExecutionError("Decomposer agent model is not configured.")
 
-        result = await self.agent.run(
-            with_datetime_context(
-                "Normalize this natural-language request into queue01 root task(s).\n\n"
-                f"User request:\n{description}"
+        try:
+            result = await self.agent.run(
+                with_datetime_context(
+                    "Normalize this natural-language request into queue01 root task(s).\n\n"
+                    f"User request:\n{description}"
+                )
             )
-        )
+        except Exception as exc:
+            failure = summarize_http_failure(str(exc))
+            if failure:
+                raise AgentExecutionError(failure) from exc
+            raise
         return self._normalize_plan(result.output)
 
 

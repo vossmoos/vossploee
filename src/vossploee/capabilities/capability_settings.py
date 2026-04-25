@@ -22,6 +22,12 @@ _DEFAULT_TOOLS: dict[str, tuple[str, ...]] = {
         "core.memory_remember",
         "core.memory_recall",
     ),
+    "newsroom": (
+        "newsroom.news_monitor",
+        "newsroom.news_read",
+        "newsroom.news_translate",
+        "core.imap",
+    ),
 }
 
 
