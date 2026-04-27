@@ -1,123 +1,89 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from vossploee.database import Database
-from vossploee.models import (
-    AgentName,
-    ArchitectTask,
-    TaskKind,
-    TaskLogEntry,
-    TaskQueue,
-    TaskQueuePolicy,
-    TaskRecord,
-    TaskStatus,
-    TaskTree,
-)
+from vossploee.models import Message, RoleTask, TaskRecord, TaskStatus, TaskTree, UserRef
 
 
 class TaskRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    async def create_root_task(
-        self,
-        *,
-        title: str,
-        description: str,
-        agent_name: AgentName,
-        capability_name: str,
-        scheduled_at: datetime | None = None,
-        queue_policy: TaskQueuePolicy = TaskQueuePolicy.FIFO,
-    ) -> TaskRecord:
-        task_id = str(uuid4())
-        now = self._now()
-        sched = self._dt_to_iso(scheduled_at)
-
-        async with self.database.connection() as conn:
-            await conn.execute(
-                """
-                INSERT INTO tasks (
-                    id, parent_id, root_id, title, description, queue_name, task_kind,
-                    status, agent_name, capability_name, created_at, updated_at, scheduled_at,
-                    queue_policy
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    task_id,
-                    None,
-                    task_id,
-                    title,
-                    description,
-                    TaskQueue.QUEUE01,
-                    TaskKind.BUSINESS,
-                    TaskStatus.PENDING,
-                    agent_name,
-                    capability_name,
-                    now,
-                    now,
-                    sched,
-                    queue_policy.value,
-                ),
-            )
-            await conn.commit()
-
-        created_task = await self.get_task(task_id)
-        if created_task is None:  # pragma: no cover - defensive guard
-            raise RuntimeError("Created root task could not be reloaded.")
-        return created_task
-
-    async def create_child_tasks(
-        self,
-        *,
-        parent: TaskRecord,
-        tasks: list[ArchitectTask],
-    ) -> list[TaskRecord]:
-        # Siblings must have strictly increasing created_at so FIFO claim order matches the
-        # Architect's list order (otherwise ORDER BY created_at, id tie-breaks on random UUIDs).
-        child_timestamps = self._sequential_child_timestamps(len(tasks))
-        child_ids = [str(uuid4()) for _ in tasks]
-
-        async with self.database.connection() as conn:
-            for task_id, task, created_at in zip(child_ids, tasks, child_timestamps, strict=True):
-                sched = self._dt_to_iso(task.scheduled_at)
+    async def create_root_tasks(self, roots: list[RoleTask]) -> list[TaskRecord]:
+        created: list[TaskRecord] = []
+        for root in roots:
+            task_id = str(uuid4())
+            now = self._now()
+            capability_id = root.role_id.split(".", 1)[0]
+            async with self.database.connection() as conn:
                 await conn.execute(
                     """
                     INSERT INTO tasks (
-                        id, parent_id, root_id, title, description, queue_name, task_kind,
-                        status, agent_name, capability_name, gherkin, created_at, updated_at,
-                        scheduled_at, queue_policy
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        id, parent_id, root_id, role_id, capability_id, title, description,
+                        payload_json, status, queue_policy, scheduled_at, refining_user_json,
+                        result, created_at, updated_at, claimed_at, completed_at
+                    ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
                     """,
                     (
                         task_id,
-                        parent.id,
-                        parent.root_id,
-                        task.title,
-                        task.description,
-                        TaskQueue.QUEUE02,
-                        TaskKind.GHERKIN,
-                        TaskStatus.PENDING,
-                        AgentName.ARCHITECT,
-                        parent.capability_name,
-                        task.gherkin,
-                        created_at,
-                        created_at,
-                        sched,
-                        task.queue_policy.value,
+                        task_id,
+                        root.role_id,
+                        capability_id,
+                        root.title,
+                        root.description,
+                        json.dumps(root.payload),
+                        TaskStatus.PENDING.value,
+                        root.queue_policy,
+                        self._dt_to_iso(root.scheduled_at),
+                        now,
+                        now,
                     ),
                 )
-            await conn.commit()
+                await conn.commit()
+            maybe = await self.get_task(task_id)
+            if maybe:
+                created.append(maybe)
+        return created
 
-        created_children: list[TaskRecord] = []
-        for task_id in child_ids:
-            child = await self.get_task(task_id)
-            if child is None:  # pragma: no cover - defensive guard
-                raise RuntimeError("Created child task could not be reloaded.")
-            created_children.append(child)
-        return created_children
+    async def create_child_tasks(self, *, parent: TaskRecord, tasks: list[RoleTask]) -> list[TaskRecord]:
+        created: list[TaskRecord] = []
+        for child in tasks:
+            child_id = str(uuid4())
+            now = self._now()
+            capability_id = child.role_id.split(".", 1)[0]
+            async with self.database.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO tasks (
+                        id, parent_id, root_id, role_id, capability_id, title, description,
+                        payload_json, status, queue_policy, scheduled_at, refining_user_json,
+                        result, created_at, updated_at, claimed_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
+                    """,
+                    (
+                        child_id,
+                        str(parent.id),
+                        str(parent.root_id),
+                        child.role_id,
+                        capability_id,
+                        child.title,
+                        child.description,
+                        json.dumps(child.payload),
+                        TaskStatus.PENDING.value,
+                        child.queue_policy,
+                        self._dt_to_iso(child.scheduled_at),
+                        now,
+                        now,
+                    ),
+                )
+                await conn.commit()
+            maybe = await self.get_task(child_id)
+            if maybe:
+                created.append(maybe)
+        return created
 
     async def get_task(self, task_id: str) -> TaskRecord | None:
         async with self.database.connection() as conn:
@@ -135,185 +101,36 @@ class TaskRepository:
 
         return [self._to_record(row) for row in rows]
 
-    async def list_queue01_tasks(
-        self,
-        *,
-        capability_name: str,
-        search: str | None = None,
-    ) -> list[TaskRecord]:
+    async def claim_next_task(self, *, role_id: str, now: datetime) -> TaskRecord | None:
+        now_iso = now.astimezone(UTC).isoformat()
         async with self.database.connection() as conn:
-            if search and search.strip():
-                like = f"%{search.strip()}%"
+            await conn.execute("BEGIN IMMEDIATE")
+            row = None
+            for policy, created_order in (("lifo", "DESC"), ("fifo", "ASC")):
                 cursor = await conn.execute(
-                    """
-                    SELECT * FROM tasks
-                    WHERE queue_name = ? AND capability_name = ?
-                      AND (title LIKE ? OR description LIKE ?)
-                    ORDER BY created_at ASC, id ASC
+                    f"""
+                    SELECT id FROM tasks
+                    WHERE status = ? AND role_id = ? AND (scheduled_at IS NULL OR scheduled_at <= ?)
+                      AND queue_policy = ?
+                    ORDER BY created_at {created_order}, id {created_order}
+                    LIMIT 1
                     """,
-                    (TaskQueue.QUEUE01, capability_name, like, like),
+                    (TaskStatus.PENDING.value, role_id, now_iso, policy),
                 )
-            else:
-                cursor = await conn.execute(
-                    """
-                    SELECT * FROM tasks
-                    WHERE queue_name = ? AND capability_name = ?
-                    ORDER BY created_at ASC, id ASC
-                    """,
-                    (TaskQueue.QUEUE01, capability_name),
-                )
-            rows = await cursor.fetchall()
-
-        return [self._to_record(row) for row in rows]
-
-    async def list_queue01_tasks_all_capabilities(
-        self,
-        *,
-        search: str | None = None,
-    ) -> list[TaskRecord]:
-        """All queue01 roots across capabilities (for platform / core orchestration)."""
-        async with self.database.connection() as conn:
-            if search and search.strip():
-                like = f"%{search.strip()}%"
-                cursor = await conn.execute(
-                    """
-                    SELECT * FROM tasks
-                    WHERE queue_name = ?
-                      AND (title LIKE ? OR description LIKE ?)
-                    ORDER BY capability_name ASC, created_at ASC, id ASC
-                    """,
-                    (TaskQueue.QUEUE01, like, like),
-                )
-            else:
-                cursor = await conn.execute(
-                    """
-                    SELECT * FROM tasks
-                    WHERE queue_name = ?
-                    ORDER BY capability_name ASC, created_at ASC, id ASC
-                    """,
-                    (TaskQueue.QUEUE01,),
-                )
-            rows = await cursor.fetchall()
-
-        return [self._to_record(row) for row in rows]
-
-    async def delete_queue01_roots_by_ids(
-        self,
-        *,
-        task_ids: list[str],
-    ) -> tuple[int, list[str]]:
-        """Delete queue01 roots by id regardless of capability (each row's subtree removed)."""
-        messages: list[str] = []
-        ok_n = 0
-        seen: set[str] = set()
-        for raw in task_ids:
-            tid = (raw or "").strip()
-            if not tid or tid in seen:
-                continue
-            seen.add(tid)
-            task = await self.get_task(tid)
-            if task is None:
-                messages.append(f"{tid!r}: not found.")
-                continue
-            if task.queue_name != TaskQueue.QUEUE01:
-                messages.append(f"{tid!r}: not a queue01 root.")
-                continue
-            deleted = await self.delete_task_tree(tid)
-            if deleted:
-                ok_n += 1
-                messages.append(
-                    f"{tid!r}: deleted queue01 root ({task.capability_name!r}) and subtree."
-                )
-            else:  # pragma: no cover - defensive
-                messages.append(f"{tid!r}: delete failed.")
-        return ok_n, messages
-
-    async def delete_queue01_task(
-        self,
-        *,
-        task_id: str,
-        capability_name: str,
-    ) -> tuple[bool, str]:
-        task = await self.get_task(task_id)
-        if task is None:
-            return False, "Task not found."
-        if task.queue_name != TaskQueue.QUEUE01:
-            return False, "Only queue01 (root business) tasks can be deleted with this tool."
-        if task.capability_name != capability_name:
-            return False, "Task belongs to another capability."
-        deleted = await self.delete_task_tree(task_id)
-        if not deleted:  # pragma: no cover - defensive
-            return False, "Delete failed."
-        return True, f"Deleted queue01 task {task_id!r} and all of its child tasks."
-
-    async def delete_queue01_tasks_batch(
-        self,
-        *,
-        task_ids: list[str],
-        capability_name: str,
-    ) -> tuple[int, list[str]]:
-        """Delete multiple queue01 roots (each subtree). Returns (success_count, per-id messages)."""
-        messages: list[str] = []
-        ok_n = 0
-        seen: set[str] = set()
-        for raw in task_ids:
-            tid = (raw or "").strip()
-            if not tid or tid in seen:
-                continue
-            seen.add(tid)
-            ok, msg = await self.delete_queue01_task(
-                task_id=tid, capability_name=capability_name
-            )
-            if ok:
-                ok_n += 1
-            messages.append(msg)
-        return ok_n, messages
-
-    async def defer_queue02_task(
-        self,
-        *,
-        task_id: str,
-        capability_name: str,
-        until: datetime,
-    ) -> tuple[bool, str]:
-        task = await self.get_task(task_id)
-        if task is None:
-            return False, "Task not found."
-        if task.queue_name != TaskQueue.QUEUE02:
-            return False, "Only queue02 (action) tasks can be deferred."
-        if task.capability_name != capability_name:
-            return False, "Task belongs to another capability."
-        if task.status not in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
-            return False, "Task is already finished; it cannot be deferred."
-
-        until_utc = until.astimezone(UTC) if until.tzinfo else until.replace(tzinfo=UTC)
-        if until_utc <= datetime.now(UTC):
-            return False, "The scheduled time must be strictly in the future (UTC)."
-
-        now = self._now()
-        async with self.database.connection() as conn:
+                row = await cursor.fetchone()
+                if row:
+                    break
+            if not row:
+                await conn.rollback()
+                return None
             await conn.execute(
-                """
-                UPDATE tasks
-                SET status = ?, agent_name = ?, claimed_at = ?, scheduled_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    TaskStatus.PENDING,
-                    AgentName.ARCHITECT,
-                    None,
-                    until_utc.isoformat(),
-                    now,
-                    task_id,
-                ),
+                "UPDATE tasks SET status=?, claimed_at=?, updated_at=? WHERE id=?",
+                (TaskStatus.IN_PROGRESS.value, now_iso, now_iso, row["id"]),
             )
+            cursor = await conn.execute("SELECT * FROM tasks WHERE id=?", (row["id"],))
+            claimed = await cursor.fetchone()
             await conn.commit()
-
-        return (
-            True,
-            f"Deferred task {task_id!r} until {until_utc.isoformat()} (UTC). "
-            "It will become claimable again at or after that time.",
-        )
+        return self._to_record(claimed) if claimed else None
 
     async def list_tree(self) -> list[TaskTree]:
         items = await self.list_flat()
@@ -337,14 +154,9 @@ class TaskRepository:
         *,
         offset: int = 0,
         limit: int | None = None,
-    ) -> list[TaskLogEntry]:
-        """Return archived task trees from `tasklog`, newest first.
-
-        When ``limit`` is ``None``, return all rows (used by ``GET /api/tasklog``).
-        Otherwise apply ``LIMIT`` / ``OFFSET`` for pagination (``GET /api/log``).
-        """
+    ) -> list[dict[str, object]]:
         base = (
-            "SELECT id, root_id, capability_name, payload_json, created_at FROM tasklog "
+            "SELECT id, root_id, payload_json, created_at FROM tasklog "
             "ORDER BY created_at DESC, id DESC"
         )
         async with self.database.connection() as conn:
@@ -354,17 +166,11 @@ class TaskRepository:
                 cursor = await conn.execute(f"{base} LIMIT ? OFFSET ?", (limit, offset))
             rows = await cursor.fetchall()
 
-        out: list[TaskLogEntry] = []
+        out: list[dict[str, object]] = []
         for row in rows:
             payload = json.loads(row["payload_json"])
             out.append(
-                TaskLogEntry(
-                    id=row["id"],
-                    root_id=row["root_id"],
-                    capability_name=row["capability_name"],
-                    payload=payload,
-                    created_at=datetime.fromisoformat(row["created_at"]),
-                )
+                {"id": row["id"], "root_id": row["root_id"], "payload": payload, "created_at": row["created_at"]}
             )
         return out
 
@@ -374,172 +180,34 @@ class TaskRepository:
             await conn.commit()
             return cursor.rowcount > 0
 
-    async def claim_next_task(
-        self,
-        *,
-        queue_name: TaskQueue,
-        agent_name: AgentName,
-        capability_name: str,
-    ) -> TaskRecord | None:
-        now = self._now()
-        # Claim all pending LIFO tasks (newest first) before any FIFO task (oldest first).
-        # See TaskQueuePolicy on TaskRecord / DecomposedRootTask / ArchitectTask.
-        base_where = """
-                WHERE queue_name = ? AND status = ? AND capability_name = ?
-                  AND (scheduled_at IS NULL OR scheduled_at <= ?)
-                  AND COALESCE(queue_policy, 'fifo') = ?
-                """
-
-        async with self.database.connection() as conn:
-            await conn.execute("BEGIN IMMEDIATE")
-            row = None
-            for policy in (TaskQueuePolicy.LIFO, TaskQueuePolicy.FIFO):
-                order_created = "DESC" if policy == TaskQueuePolicy.LIFO else "ASC"
-                order_id = "DESC" if policy == TaskQueuePolicy.LIFO else "ASC"
-                cursor = await conn.execute(
-                    f"""
-                    SELECT id
-                    FROM tasks
-                    {base_where}
-                    ORDER BY created_at {order_created}, id {order_id}
-                    LIMIT 1
-                    """,
-                    (queue_name, TaskStatus.PENDING, capability_name, now, policy.value),
-                )
-                row = await cursor.fetchone()
-                if row is not None:
-                    break
-
-            if row is None:
-                await conn.rollback()
-                return None
-
-            # Keep `scheduled_at` so the Implementer (and API) still see the Planner's target UTC
-            # instant while the task is in progress; pending-queue selection uses status=pending only.
-            await conn.execute(
-                """
-                UPDATE tasks
-                SET status = ?, agent_name = ?, claimed_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (TaskStatus.IN_PROGRESS, agent_name, now, now, row["id"]),
-            )
-            cursor = await conn.execute("SELECT * FROM tasks WHERE id = ?", (row["id"],))
-            claimed_row = await cursor.fetchone()
-            await conn.commit()
-
-        return self._to_record(claimed_row) if claimed_row else None
-
     async def complete_task(self, task_id: str, *, result: str) -> None:
-        now = self._now()
-        root_id: str | None = None
-        async with self.database.connection() as conn:
-            cursor = await conn.execute("SELECT root_id FROM tasks WHERE id = ?", (task_id,))
-            row = await cursor.fetchone()
-            if row:
-                root_id = row["root_id"]
-
-            await conn.execute(
-                """
-                UPDATE tasks
-                SET status = ?, result = ?, completed_at = ?, updated_at = ?, scheduled_at = NULL
-                WHERE id = ?
-                """,
-                (TaskStatus.COMPLETED, result, now, now, task_id),
-            )
-            await conn.commit()
-
-        if root_id:
-            await self._maybe_archive_finished_tree(root_id)
+        await self._set_terminal(task_id=task_id, status=TaskStatus.COMPLETED, result=result)
 
     async def fail_task(self, task_id: str, *, error_message: str) -> None:
-        now = self._now()
-        root_id: str | None = None
-        async with self.database.connection() as conn:
-            cursor = await conn.execute("SELECT root_id FROM tasks WHERE id = ?", (task_id,))
-            row = await cursor.fetchone()
-            if row:
-                root_id = row["root_id"]
+        await self._set_terminal(task_id=task_id, status=TaskStatus.FAILED, result=error_message)
 
+    async def set_refining(self, *, task_id: str, user: UserRef) -> None:
+        now = self._now()
+        async with self.database.connection() as conn:
             await conn.execute(
-                """
-                UPDATE tasks
-                SET status = ?, result = ?, updated_at = ?, scheduled_at = NULL
-                WHERE id = ?
-                """,
-                (TaskStatus.FAILED, error_message, now, task_id),
+                "UPDATE tasks SET status=?, refining_user_json=?, updated_at=? WHERE id=?",
+                (TaskStatus.REFINING.value, user.model_dump_json(), now, task_id),
             )
             await conn.commit()
 
-        if root_id:
-            await self._maybe_archive_finished_tree(root_id)
-
-    async def upwork_job_ids_already_processed(self, job_ids: list[str]) -> set[str]:
-        """Return the subset of ``job_ids`` already stored in ``upwork_processed_jobs``."""
-        cleaned = [str(x).strip() for x in job_ids if str(x).strip()]
-        if not cleaned:
-            return set()
-        unique = list(dict.fromkeys(cleaned))
-        placeholders = ",".join("?" * len(unique))
-        async with self.database.connection() as conn:
-            cursor = await conn.execute(
-                f"SELECT job_id FROM upwork_processed_jobs WHERE job_id IN ({placeholders})",
-                unique,
-            )
-            rows = await cursor.fetchall()
-        return {str(r["job_id"]) for r in rows}
-
-    async def mark_upwork_jobs_processed(self, job_ids: list[str]) -> None:
-        """Record Upwork job IDs (dedupe keys) for **scheduled** monitor flows.
-
-        The upworkmanager Architect calls this only when the queue01 root has ``scheduled_at`` set
-        so one-off searches do not pollute the skip list.
-        """
-        cleaned = [str(x).strip() for x in job_ids if str(x).strip()]
-        if not cleaned:
+    async def resume_refining(self, task_id: str, answer: Message) -> None:
+        task = await self.get_task(task_id)
+        if not task:
             return
+        payload = dict(task.payload)
+        refinements = payload.setdefault("refinement", [])
+        refinements.append(answer.model_dump(mode="json"))
         now = self._now()
         async with self.database.connection() as conn:
-            for jid in dict.fromkeys(cleaned):
-                await conn.execute(
-                    """
-                    INSERT OR IGNORE INTO upwork_processed_jobs (job_id, processed_at)
-                    VALUES (?, ?)
-                    """,
-                    (jid, now),
-                )
-            await conn.commit()
-
-    async def newsroom_article_urls_already_processed(self, urls: list[str]) -> set[str]:
-        """Return URLs already stored in ``newsroom_processed_articles`` (dedupe keys)."""
-        cleaned = [str(x).strip() for x in urls if str(x).strip()]
-        if not cleaned:
-            return set()
-        unique = list(dict.fromkeys(cleaned))
-        placeholders = ",".join("?" * len(unique))
-        async with self.database.connection() as conn:
-            cursor = await conn.execute(
-                f"SELECT article_url FROM newsroom_processed_articles WHERE article_url IN ({placeholders})",
-                unique,
+            await conn.execute(
+                "UPDATE tasks SET status=?, payload_json=?, refining_user_json=NULL, updated_at=? WHERE id=?",
+                (TaskStatus.PENDING.value, json.dumps(payload), now, task_id),
             )
-            rows = await cursor.fetchall()
-        return {str(r["article_url"]) for r in rows}
-
-    async def mark_newsroom_articles_processed(self, urls: list[str]) -> None:
-        """Record article page URLs after successful ingest into Chroma."""
-        cleaned = [str(x).strip() for x in urls if str(x).strip()]
-        if not cleaned:
-            return
-        now = self._now()
-        async with self.database.connection() as conn:
-            for u in dict.fromkeys(cleaned):
-                await conn.execute(
-                    """
-                    INSERT OR IGNORE INTO newsroom_processed_articles (article_url, processed_at)
-                    VALUES (?, ?)
-                    """,
-                    (u, now),
-                )
             await conn.commit()
 
     async def _maybe_archive_finished_tree(self, root_id: str) -> None:
@@ -562,19 +230,15 @@ class TaskRepository:
                 return
 
             tree = self._single_tree_from_records(records)
-            capability_name = next(
-                (r.capability_name for r in records if r.id == root_id),
-                records[0].capability_name,
-            )
             log_id = str(uuid4())
             now = self._now()
             payload_json = tree.model_dump_json()
             await conn.execute(
                 """
-                INSERT INTO tasklog (id, root_id, capability_name, payload_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO tasklog (id, root_id, payload_json, created_at)
+                VALUES (?, ?, ?, ?)
                 """,
-                (log_id, root_id, capability_name, payload_json, now),
+                (log_id, root_id, payload_json, now),
             )
             await conn.execute("DELETE FROM tasks WHERE root_id = ?", (root_id,))
             await conn.commit()
@@ -595,19 +259,15 @@ class TaskRepository:
 
     @staticmethod
     def _to_record(row: object) -> TaskRecord:
-        return TaskRecord.model_validate(dict(row))
+        raw = dict(row)
+        raw["payload"] = json.loads(raw.pop("payload_json") or "{}")
+        refining_raw = raw.pop("refining_user_json")
+        raw["refining_until_user"] = json.loads(refining_raw) if refining_raw else None
+        return TaskRecord.model_validate(raw)
 
     @staticmethod
     def _now() -> str:
         return datetime.now(UTC).isoformat()
-
-    @staticmethod
-    def _sequential_child_timestamps(count: int) -> list[str]:
-        """Monotonic ISO timestamps for sibling queue02 rows (microsecond stride)."""
-        if count <= 0:
-            return []
-        base = datetime.now(UTC)
-        return [(base + timedelta(microseconds=i)).isoformat() for i in range(count)]
 
     @staticmethod
     def _dt_to_iso(value: datetime | None) -> str | None:
@@ -615,3 +275,99 @@ class TaskRepository:
             return None
         dt = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
         return dt.isoformat()
+
+    async def _set_terminal(self, *, task_id: str, status: TaskStatus, result: str) -> None:
+        now = self._now()
+        root_id: str | None = None
+        async with self.database.connection() as conn:
+            cursor = await conn.execute("SELECT root_id FROM tasks WHERE id=?", (task_id,))
+            row = await cursor.fetchone()
+            if row:
+                root_id = row["root_id"]
+            await conn.execute(
+                "UPDATE tasks SET status=?, result=?, completed_at=?, updated_at=?, scheduled_at=NULL WHERE id=?",
+                (status.value, result, now, now, task_id),
+            )
+            await conn.commit()
+        if root_id:
+            await self._maybe_archive_finished_tree(root_id)
+
+
+class ChannelRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    async def create_message(
+        self,
+        *,
+        channel_id: str,
+        sender: UserRef,
+        receiver: UserRef,
+        body: dict[str, object],
+        in_reply_to: str | None = None,
+        task_id: str | None = None,
+        dedupe_key: str | None = None,
+    ) -> Message:
+        msg_id = str(uuid4())
+        now = datetime.now(UTC).isoformat()
+        async with self.database.connection() as conn:
+            await conn.execute(
+                """
+                INSERT OR IGNORE INTO channel_messages
+                (id, channel_id, sender_json, receiver_json, body_json, in_reply_to, task_id, dedupe_key, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    msg_id,
+                    channel_id,
+                    sender.model_dump_json(),
+                    receiver.model_dump_json(),
+                    json.dumps(body),
+                    in_reply_to,
+                    task_id,
+                    dedupe_key,
+                    now,
+                ),
+            )
+            await conn.commit()
+        return Message.model_validate(
+            {
+                "id": msg_id,
+                "channel_id": channel_id,
+                "sender": sender.model_dump(),
+                "receiver": receiver.model_dump(),
+                "body": body,
+                "in_reply_to": in_reply_to,
+                "task_id": task_id,
+                "created_at": now,
+            }
+        )
+
+    async def list_messages(self, *, channel_id: str, user_id: str, n: int = 50) -> list[Message]:
+        async with self.database.connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM channel_messages
+                WHERE channel_id=? AND (json_extract(sender_json, '$.user_id')=? OR json_extract(receiver_json, '$.user_id')=?)
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (channel_id, user_id, user_id, n),
+            )
+            rows = await cursor.fetchall()
+        out: list[Message] = []
+        for row in rows:
+            out.append(
+                Message.model_validate(
+                    {
+                        "id": row["id"],
+                        "channel_id": row["channel_id"],
+                        "sender": json.loads(row["sender_json"]),
+                        "receiver": json.loads(row["receiver_json"]),
+                        "body": json.loads(row["body_json"]),
+                        "in_reply_to": row["in_reply_to"],
+                        "task_id": row["task_id"],
+                        "created_at": row["created_at"],
+                    }
+                )
+            )
+        return out

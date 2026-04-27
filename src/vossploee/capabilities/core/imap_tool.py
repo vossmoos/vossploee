@@ -7,12 +7,7 @@ from email.message import EmailMessage
 from email.policy import SMTP
 from os import getenv
 
-from dotenv import load_dotenv
-
-from vossploee.capabilities.capability_settings import load_capability_settings
-
-# Only this address may receive mail from this tool (hard limit).
-_ALLOWED_RECIPIENT = "aol@vossmoos.de"
+from vossploee.config import get_settings
 
 
 def _smtp_login_plain_utf8(smtp: smtplib.SMTP_SSL, user: str, password: str) -> None:
@@ -43,44 +38,37 @@ def _send_mail_sync(
     smtp_port: int,
     user: str,
     password: str,
+    recipient: str,
     subject: str,
     body: str,
 ) -> str:
     msg = EmailMessage(policy=SMTP)
     msg["Subject"] = subject.strip() or "(no subject)"
     msg["From"] = user
-    msg["To"] = _ALLOWED_RECIPIENT
+    msg["To"] = recipient
     msg.set_content(body, subtype="plain", charset="utf-8")
 
     with smtplib.SMTP_SSL(smtp_host, smtp_port) as smtp:
         _smtp_login_plain_utf8(smtp, user, password)
         smtp.send_message(msg)
 
-    return (
-        f"Email sent via SMTP {smtp_host}:{smtp_port} SSL to {_ALLOWED_RECIPIENT!r} "
-        f"(subject: {msg['Subject']!r})."
-    )
+    return f"Email sent via SMTP {smtp_host}:{smtp_port} SSL to {recipient!r} (subject: {msg['Subject']!r})."
 
 
-async def imap_send_mail(subject: str, body: str) -> str:
-    """Send one email to the fixed allowed recipient using SMTP (SSL) from core capability config.
+async def imap_send_mail(subject: str, body: str, recipient: str) -> str:
+    settings = get_settings()
+    allowed = {x.lower() for x in settings.channel_email_allowed_senders}
+    recipient = (recipient or "").strip().lower()
+    if recipient not in allowed:
+        return f"Recipient {recipient!r} is not in VOSSPLOEE_CHANNEL_EMAIL_ALLOWED_SENDERS."
 
-    Outgoing mail uses ``[imap].smtp_host`` / ``smtp_port`` in ``core/config.toml``. Credentials
-    use the env var names in that section. IMAP host/port in config are not used by this action.
-    """
-    load_dotenv()
-    cfg = load_capability_settings("core").imap
-    if cfg is None:
-        return "Mail is not configured for the core capability (missing [imap] in core/config.toml)."
-
-    user = getenv(cfg.user_env, "") or ""
-    password = getenv(cfg.password_env, "") or ""
+    user = getenv(settings.channel_email_user_env, "") or ""
+    password = getenv(settings.channel_email_password_env, "") or ""
     user, password = user.strip(), password.strip()
     if not user or not password:
         return (
-            "Mail credentials missing: set the environment variables named in core/config.toml "
-            f"([imap].user_env / [imap].password_env), currently {cfg.user_env!r} and "
-            f"{cfg.password_env!r}, e.g. in `.env`."
+            "Mail credentials missing in configured env vars "
+            f"{settings.channel_email_user_env!r} and {settings.channel_email_password_env!r}."
         )
 
     if not (body or "").strip():
@@ -89,10 +77,11 @@ async def imap_send_mail(subject: str, body: str) -> str:
     try:
         return await asyncio.to_thread(
             _send_mail_sync,
-            smtp_host=cfg.smtp_host,
-            smtp_port=cfg.smtp_port,
+            smtp_host=settings.channel_email_smtp_host,
+            smtp_port=settings.channel_email_smtp_port,
             user=user,
             password=password,
+            recipient=recipient,
             subject=subject,
             body=body,
         )

@@ -1,28 +1,32 @@
 from __future__ import annotations
 
-from vossploee.capabilities.base import CapabilityModule, TaskWorker
-from vossploee.capabilities.core.architect import CoreArchitectWorker
-from vossploee.capabilities.core.implementer import CoreImplementerWorker
-from vossploee.config import Settings
+from pathlib import Path
+
+from vossploee.capabilities.base import CapabilityModule
+from vossploee.capabilities.core.roles.decomposer import CoreDecomposer
+from vossploee.capabilities.core.roles.executor import CoreExecutor
 
 
 class CoreCapability(CapabilityModule):
-    name = "core"
-    description = (
-        "Default capability: Planner breaks business asks into doable actions; Implementer executes "
-        "them (tools, email, drafts, checks—not only code). Baseline tools in config.toml."
-    )
+    id = "core"
+    description = "Core orchestration capability."
 
-    def __init__(self, settings: Settings) -> None:
-        self._architect_worker = CoreArchitectWorker(settings)
-        self._implementer_worker = CoreImplementerWorker(settings)
+    def __init__(self, settings, app_whoami: str) -> None:
+        whoami = self.whoami_markdown()
+        self._roles = {
+            "decomposer": CoreDecomposer(app_whoami=app_whoami, capability_whoami=whoami),
+            "executor": CoreExecutor(app_whoami=app_whoami, capability_whoami=whoami),
+        }
 
-    def get_architect_worker(self) -> TaskWorker:
-        return self._architect_worker
+    def roles(self):
+        return self._roles
 
-    def get_implementer_worker(self) -> TaskWorker:
-        return self._implementer_worker
+    def whoami_markdown(self) -> str:
+        path = Path(__file__).resolve().parent / "WHOAMI.md"
+        if not path.exists():
+            return "You are the core capability."
+        return path.read_text(encoding="utf-8").strip()
 
 
-def build_capability(settings: Settings) -> CapabilityModule:
-    return CoreCapability(settings)
+def build_capability(settings, app_whoami: str = "") -> CapabilityModule:
+    return CoreCapability(settings, app_whoami=app_whoami)
