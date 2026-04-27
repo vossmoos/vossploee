@@ -1,6 +1,6 @@
 ## Vossploee
 
-Vossploee is a framework for building autonomous AI-workers: focused AI-agents that can receive work, reason about it, use tools, remember all their context, and hand tasks to other agents.
+Vossploee is a framework for building autonomous AI-workers: focused AI-agents that can receive work, reason about it, use tools, execute tasks, remember their context, and delegate work to other agents.
 
 It is designed as a practical brick for AI-driven autonomous agent networks. A single Vossployee can run as an autonomous worker process. Multiple Vossployees can be combined into a network of specialized workers, each with its own capabilities, roles, channels, memory, and operational boundaries. The result is a foundation for engineered agentic systems that can decompose work, execute tasks, communicate with users, and evolve into larger autonomous organizations.
 
