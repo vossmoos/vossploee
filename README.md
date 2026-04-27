@@ -1,44 +1,63 @@
 ## Vossploee
 
-**Vossploee** is a **unit**: a single **autonomous employee** you can run on its own. It accepts assignments, breaks them into work it can perform, routes pieces to **capabilities** (mail, research, domain-specific workflows, and more), and carries them through to completion—keeping durable state, a full picture of open and finished work, and an HTTP surface for supervision and wiring into other systems.
+Vossploee is a framework for building autonomous AI-workers: focused AI-agents that can receive work, reason about it, use tools, remember all their context, and hand tasks to other agents.
 
-The same idea scales socially: **many Vossploee units**—each an independent employee with its own skills and mandate—can be **united in a decentralized autonomous organization (DAO)**. The DAO is the collective; each unit remains autonomous, but together they form the **hive** that is the organization.
+It is designed as a practical brick for AI-driven autonomous agent networks. A single Vossployee can run as an autonomous worker process. Multiple Vossployees can be combined into a network of specialized workers, each with its own capabilities, roles, channels, memory, and operational boundaries. The result is a foundation for engineered agentic systems that can decompose work, execute tasks, communicate with users, and evolve into larger autonomous organizations.
 
-You can run a unit **on your laptop, a workstation, or any virtual machine** with a normal Python environment. **LLM calls** are configured through Pydantic AI model ids and provider credentials: use **public APIs** (OpenAI, Anthropic, Google, and others supported by your stack) or **private / self-hosted** endpoints, depending on policy and networking.
+## Why It Matters
 
-**Vossploee behaves in a non-deterministic way**: planning and execution are model-guided, so runs are not fixed scripts with identical outcomes every time. The concrete surface area for acting in the world is **tools**—defined ways to read, edit, call external systems, or otherwise perform an action. Tools are **grouped into capabilities**. Each **capability** bundles its own slice of behavior: **agent implementations** that follow the framework’s interfaces, **specialized prompts**, **tools** wired to external APIs where needed, and **supporting data** (configuration, allowlists, and similar) that keeps that domain coherent.
+Modern AI automation needs more than a prompt and an API call. Real autonomous workers need structure:
 
-## Technologies
+- **Roles** focus on a particular responsibility, behavior, and tool access.
+- **Capabilities** package domain-specific skills that can be enabled, disabled, or extended.
+- **Channels** connect workers to the outside world through email, messengers, REST, or future interfaces.
+- **Tasks** provide a durable contract for decomposition, execution, cancellation, and inspection.
+- **Memory** gives workers long-term context instead of stateless one-off responses.
+- **Reasoning telemetry** makes agent decisions easier to inspect and improve.
 
-- **Python** 3.12+
-- **[FastAPI](https://fastapi.tiangolo.com/)** — HTTP API
-- **[Uvicorn](https://www.uvicorn.org/)** — ASGI server
-- **[Pydantic](https://docs.pydantic.dev/)** & **[Pydantic Settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)** — configuration and models
-- **[Pydantic AI](https://ai.pydantic.dev/)** — structured LLM agents (decomposer, architect, implementer, capability agents)
-- **[aiosqlite](https://github.com/omnilib/aiosqlite)** — async SQLite
-- **SQLite** — durable task state and logs
-- **[uv](https://docs.astral.sh/uv/)** — project and lockfile (`uv.lock`)
-- **[ChromaDB](https://www.trychroma.com/)** (optional) — on-disk vector store for capability-scoped long-term memory when memory tools are enabled
+This makes Vossploee useful both as a working implementation and as an architectural pattern for teams building autonomous AI-worker networks.
 
-## What Is In This Repo
+## Core Idea
 
-- HTTP API and lifespan in `src/vossploee/main.py` (**`X-API-KEY`** / `VOSSPLOEE_API_KEY` — set a shared secret in `.env`, e.g. from `default.env`; leave empty only if you deliberately want no HTTP key check)
-- SQLite-backed task repository, workers, and agent registry
-- **Capability** packages under `src/vossploee/capabilities/` (pluggable tools + config)
-- Shared tool registry in `src/vossploee/tools/registry.py`
+Each worker is composed from three explicit building blocks:
 
-Current capability packages:
+- `capability`: what the worker knows how to do.
+- `role`: what responsibility (focus) the worker has inside that capability.
+- `channel`: how work enters and leaves the system.
 
-- **`core`** — turns requests into concrete actions and executes them (includes `core.imap`)
-- **`brainstormer`** — generates idea branches and short strategy briefs
+Together they form `capability.role` workers such as `core.decomposer`, `core.executor`, or `haiku.writer`. This model keeps the system modular while allowing many workers to cooperate inside a larger network.
 
-Additional capability packages can be dropped into `src/vossploee/capabilities/` (each with its own `config.toml`, `README.md`, and `tools_register`) and enabled via `VOSSPLOEE_ENABLED_CAPABILITIES`. This is how a unit takes on new domain skills—for example, a **multi-omics EHR worker** that assembles a synthetic cohort for a downstream study.
+## Markdown-Configurable Agent Identity
 
-## Long-term memory
+Vossploee keeps agent instructions close to the code, but editable by humans. The global worker identity is defined in `src/vossploee/WHOAMI.md`, and each capability can define its own behavior contract in a local `WHOAMI.md`, for example `src/vossploee/capabilities/core/WHOAMI.md`.
 
-Capabilities can opt in to **semantic long-term memory** by listing the shared tools `core.memory_remember` and `core.memory_recall` in that capability’s `config.toml` tool allowlist (see `core` and `brainstormer` packages for examples). Embeddings use OpenAI **`text-embedding-3-large`**; set **`OPENAI_API_KEY`** or **`VOSSPLOEE_OPENAI_API_KEY`**. Vectors and metadata live under **`VOSSPLOEE_CHROMA_PATH`** (default `data/chroma`); the Decomposer does not use these tools.
+At runtime, Vossploee composes these Markdown instructions with the selected role prompt. This means the personality, operating principles, domain focus, and capability-specific rules of an AI-worker can be changed by editing plain `.md` files, without rebuilding the framework or hard-coding prompts into business logic.
 
-**How it works:** each stored row is tied to the **current capability** only—`core` and `brainstormer` (or another enabled capability) do not share the same memory namespace. The **Architect** and **Implementer** agents may call the tools when they choose: **`core_memory_remember`** persists labeled text (`memory_kind` is one of: `note`, `preference`, `outcome`, `fact`, `task_result`, `research`, `misc`), and **`core_memory_recall`** runs semantic search over that capability’s memories. **No stored content is injected into prompts automatically**; the only automatic addition for agents that have memory tools is a short **structural blueprint** (scope, kinds, tool names) prepended with the usual UTC time context in `PydanticTaskWorker.run_prompt`, so the model knows the contract before it decides to call the tools.
+## Current Architecture
+
+- Runtime entrypoint: `src/vossploee/main.py`
+- Settings: `src/vossploee/config.py` (`VOSSPLOEE_` env prefix)
+- Storage:
+  - `tasks` (flat durable queue)
+  - `tasklog` (archived completed roots)
+  - `channel_messages` (inbound/outbound history)
+  - `reasoning` (confidence + explanation records)
+- Worker loop: one async loop per `role_id`
+- Tool registry: capability-owned tool registration
+
+## Active Capabilities
+
+- `core`
+  - `core.decomposer` (entrypoint decomposer by default)
+  - `core.executor`
+- `haiku` (test capability)
+  - `haiku.writer`
+
+## Active Channels
+
+- `email` (default channel scaffold with message persistence + API surface)
+- `telegram` (LLM gatekeeper; chats with user and invokes decomposer only for explicit tasks)
+- `rest` (non-AI ingress channel that forwards directly to decomposer)
 
 ## Quick Start
 
@@ -54,92 +73,60 @@ uv sync
 cp default.env .env
 ```
 
-3. Fill required values in `.env`:
-- `VOSSPLOEE_AGENT_MODEL` (base model for all roles; required unless all role-specific models below are set)
-- optional role-specific model overrides:
-  - `VOSSPLOEE_DECOMPOSER_MODEL`
-  - `VOSSPLOEE_ARCHITECT_MODEL`
-  - `VOSSPLOEE_IMPLEMENTER_MODEL`
-- provider keys (for example `OPENAI_API_KEY` when using a hosted model; required for memory embeddings if memory tools are enabled)
-- `VOSSPLOEE_API_KEY` — after copying `default.env`, your `.env` includes an example shared secret; clients must send matching `X-API-KEY` (clear the value in `.env` only if you fully trust network isolation; not recommended for exposed hosts)
-- optional `VOSSPLOEE_CHROMA_PATH` if you want long-term memory files outside the default `data/chroma`
-- capability credentials as needed (for example IMAP/SMTP for the `core` mail tool)
+3. Configure at least:
 
-4. Run the API:
+- `VOSSPLOEE_API_KEY`
+- `VOSSPLOEE_AGENT_MODEL`
+- `OPENAI_API_KEY` or `VOSSPLOEE_OPENAI_API_KEY` (if using hosted LLM/embeddings)
+
+Optional but important:
+
+- `VOSSPLOEE_ENTRYPOINT_DECOMPOSER` (default `core.decomposer`)
+- `VOSSPLOEE_ENABLED_CAPABILITIES` (default currently starts with `core`)
+- `VOSSPLOEE_ENABLED_CHANNELS` (default includes `email,rest,telegram`)
+- `VOSSPLOEE_REASONING_LOG_ENABLED` (`false` by default)
+- `VOSSPLOEE_MEMORY_INJECT_TOP_K` (default `6`)
+- email allowlist and SMTP/IMAP env vars:
+  - `VOSSPLOEE_CHANNEL_EMAIL_ALLOWED_SENDERS`
+  - `VOSSPLOEE_CHANNEL_EMAIL_USER_ENV`
+  - `VOSSPLOEE_CHANNEL_EMAIL_PASSWORD_ENV`
+
+4. Run API:
 
 ```bash
 uv run python -m uvicorn vossploee.main:app --reload
 ```
 
-Health check over **HTTPS** in front of nginx (send `X-API-KEY` unless you have explicitly disabled HTTP key checks; use your `PUBLIC_HOST` if it differs):
+5. Health check:
 
 ```bash
 curl -H "X-API-KEY: <your-key>" http://127.0.0.1:8000/health
 ```
 
-Local uvicorn without a TLS terminator listens on `http://127.0.0.1:8000` only.
-
 ## API
 
-Base prefix defaults to `/api` (configurable via `VOSSPLOEE_API_PREFIX`).
+Base prefix: `/api` (configurable via `VOSSPLOEE_API_PREFIX`).
 
-- `POST /api/tasks` — submit a description; decomposer creates queue01 root tasks routed to capabilities
-- `GET /api/tasks` — full task tree
-- `GET /api/tasklog` — all archived completed workflows
-- `GET /api/log?offset=0&limit=10` — paginated archived workflows (newest first)
-- `GET /api/capabilities` — metadata for enabled capabilities
-- `DELETE /api/tasks/{task_id}` — delete task subtree
-- `GET /health` — service health
+- `POST /api/channels/rest/inbound`
+- `GET /api/tasks`
+- `GET /api/log?offset=&limit=`
+- `DELETE /api/tasks/{task_id}`
+- `GET /api/capabilities`
+- `GET /api/channels`
+- `GET /api/channels/email/messages?user=<user_id>&n=50`
+- `POST /api/channels/email/poll`
+- `GET /api/channels/telegram/messages?user=<user_id>&n=50`
+- `POST /api/channels/telegram/poll`
 
-Example — ask the unit to build a small synthetic cohort (assumes a multi-omics/EHR capability is enabled):
+## Long-Term Memory
 
-```bash
-curl -X POST http://127.0.0.1:8000/api/tasks \
-  -H "Content-Type: application/json" \
-  -H "X-API-KEY: <your-key>" \
-  -d '{
-    "description": "Populate 20 synthetic EHRs for a COVID-19 cohort aged 70+, each with demographics, comorbidities, hospitalization timeline, and a matching multi-omics summary (genomics, transcriptomics, proteomics). Store them as individual records and send me a short cohort summary by email."
-  }'
-```
+- Memory store uses Chroma path from `VOSSPLOEE_CHROMA_PATH` (default `data/chroma`).
+- Memory context is auto-injected into role LLM calls.
+- Explicit tools:
+  - `core.memory_remember`
+  - `core.memory_recall`
 
-## Configuration
+## Notes
 
-Main settings (`.env`, prefix `VOSSPLOEE_`):
-
-- `VOSSPLOEE_APP_NAME` (default: `Vossploee Task Orchestrator`)
-- `VOSSPLOEE_DATABASE_PATH` (default: `data/tasks.db`)
-- `VOSSPLOEE_CHROMA_PATH` (default: `data/chroma` — long-term memory store when memory tools are used)
-- `VOSSPLOEE_POLL_INTERVAL_SECONDS` (default: `1`)
-- `VOSSPLOEE_API_PREFIX` (default: `/api`)
-- `VOSSPLOEE_API_KEY` — when set (see `default.env` after `cp` to `.env`), every request must send `X-API-KEY` (401/403 otherwise). Set **empty** in `.env` only to skip HTTP key checks on tightly isolated networks. Rotate the example value for production.
-- `VOSSPLOEE_MAX_DECOMPOSED_ROOTS` (default: `168`)
-- `VOSSPLOEE_AGENT_MODEL` (base fallback model; use `test` for offline/CI-style runs)
-- `VOSSPLOEE_DECOMPOSER_MODEL` (optional override for Decomposer role)
-- `VOSSPLOEE_ARCHITECT_MODEL` (optional override for Architect role)
-- `VOSSPLOEE_IMPLEMENTER_MODEL` (optional override for Implementer role)
-- `VOSSPLOEE_ENABLED_CAPABILITIES` (comma-separated ids, or empty for all discovered capabilities)
-
-Notes:
-
-- `.env` is loaded into process env so capability tools can read credentials from `os.getenv`.
-- `OPENAI_API_KEY` can be set directly, or via `VOSSPLOEE_OPENAI_API_KEY`.
-
-## Capability Model
-
-Each capability package exports `build_capability(settings)` and has a `README.md` used by:
-
-- decomposer capability routing context
-- `GET /api/capabilities` response
-
-On startup, the app:
-
-- discovers capability packages under `src/vossploee/capabilities/`
-- validates `VOSSPLOEE_ENABLED_CAPABILITIES` against discovered ids
-- imports per-capability `tools_register` modules
-- validates capability `config.toml` tool allowlists against the global tool registry
-
-## Tests
-
-```bash
-uv run pytest
-```
+- `v0.1.0.instruction.md` is restored and kept as architecture source-of-truth.
+- Legacy capabilities/tests/docs were intentionally removed during cleanup.

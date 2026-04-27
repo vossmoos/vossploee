@@ -9,10 +9,10 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 data/*.db
+data/chroma/**
+!data/chroma/.gitkeep
 
 # Optional local capability package (not tracked)
-src/vossploee/capabilities/upwork/
-src/vossploee/capabilities/upworkmanager/
 tests/test_upwork_dedup.py
 tests/test_upwork_oauth.py
 uw.py

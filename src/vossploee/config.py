@@ -8,41 +8,32 @@ from typing import Annotated
 from dotenv import load_dotenv
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-from vossploee.models import AgentName
 
 
 class Settings(BaseSettings):
-    app_name: str = "Vossploee Task Orchestrator"
+    app_name: str = "Vossploee"
     database_path: Path = Field(default=Path("data/tasks.db"))
-    chroma_path: Path = Field(
-        default=Path("data/chroma"),
-        description="Directory for ChromaDB persistent storage (long-term agent memory).",
-    )
-    poll_interval_seconds: float = Field(default=1.0, ge=0.05)
-    agent_model: str | None = None
-    decomposer_model: str | None = "openai:gpt-5.4-mini"
-    architect_model: str | None = "openai:gpt-5.4"
-    implementer_model: str | None = "openai:gpt-5.4-nano"
-    """Comma-separated capability ids, or empty to enable every discovered capability package."""
-    enabled_capabilities: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    chroma_path: Path = Field(default=Path("data/chroma"))
     api_prefix: str = "/api"
-    api_key: str = Field(
-        default="",
-        description=(
-            "If non-empty, every request must send X-API-KEY matching this value "
-            "(401 if missing, 403 if wrong). The `default.env` template sets "
-            "`VOSSPLOEE_API_KEY` so `cp default.env .env` enables this layer; leave empty "
-            "to skip HTTP key checks (only on trusted networks)."
-        ),
-    )
-    max_decomposed_roots: int = Field(
-        default=168,
-        ge=1,
-        le=500,
-        description="Max queue01 roots the Decomposer may emit in one POST /tasks (e.g. hourly runs).",
-    )
-    # Loaded from .env via OPENAI_API_KEY (or VOSSPLOEE_OPENAI_API_KEY); injected into
-    # os.environ so pydantic-ai / OpenAI SDK pick it up (they do not read our .env file).
+    api_key: str = ""
+    poll_interval_seconds: float = Field(default=1.0, ge=0.05)
+    agent_model: str = "openai:gpt-5.4-mini"
+    enabled_capabilities: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["core", "uw"])
+    enabled_channels: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["email", "rest", "telegram"])
+    entrypoint_decomposer: str = "core.decomposer"
+    reasoning_log_enabled: bool = False
+    memory_inject_top_k: int = Field(default=6, ge=1, le=15)
+    channel_email_allowed_senders: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    channel_email_poll_seconds: int = Field(default=600, ge=30)
+    channel_email_imap_host: str = "imappro.zoho.eu"
+    channel_email_imap_port: int = 993
+    channel_email_smtp_host: str = "smtppro.zoho.eu"
+    channel_email_smtp_port: int = 465
+    channel_email_user_env: str = "VOSSPLOEE_CORE_IMAP_USER"
+    channel_email_password_env: str = "VOSSPLOEE_CORE_IMAP_PASSWORD"
+    channel_telegram_poll_seconds: float = Field(default=10.0, ge=0.5)
+    channel_telegram_bot_token_env: str = "VOSSPLOEE_TELEGRAM_BOT_TOKEN"
+    channel_telegram_allowed_chat_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
     openai_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("OPENAI_API_KEY", "VOSSPLOEE_OPENAI_API_KEY"),
@@ -54,31 +45,26 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("enabled_capabilities", mode="before")
+    @field_validator(
+        "enabled_capabilities",
+        "enabled_channels",
+        "channel_email_allowed_senders",
+        "channel_telegram_allowed_chat_ids",
+        mode="before",
+    )
     @classmethod
-    def parse_enabled_capabilities(cls, value: object) -> list[str]:
+    def parse_csv_list(cls, value: object) -> list[str]:
         if value is None or value == "":
             return []
         if isinstance(value, str):
             return [part.strip() for part in value.split(",") if part.strip()]
         if isinstance(value, list):
             return [str(item).strip() for item in value if str(item).strip()]
-        raise TypeError("enabled_capabilities must be a list or comma-separated string")
-
-    def model_for_agent(self, agent_name: AgentName) -> str | None:
-        if agent_name == AgentName.DECOMPOSER:
-            return self.decomposer_model or self.agent_model
-        if agent_name == AgentName.ARCHITECT:
-            return self.architect_model or self.agent_model
-        if agent_name == AgentName.IMPLEMENTER:
-            return self.implementer_model or self.agent_model
-        return self.agent_model
+        raise TypeError("value must be a list or comma-separated string")
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    # pydantic-settings reads .env only into declared fields; merge the file into os.environ so
-    # capability tools that resolve credentials via getenv(cfg.user_env) (e.g. mail) see .env values.
     load_dotenv()
     settings = Settings()
     if settings.openai_api_key:
